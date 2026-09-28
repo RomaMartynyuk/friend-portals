@@ -9,6 +9,7 @@
     "check": "friendsdk check .",
     "test:seed": "node scripts/verify-seed.mjs",
     "test:balance": "node scripts/verify-balance.mjs",
+    "test:celestial": "node scripts/verify-celestial.mjs",
     "typecheck": "tsc --noEmit",
     "test:browser": "friendsdk test . --screenshot ./artifacts/vertical-slice.png",
     "test:slice": "node scripts/verify-slice.mjs"

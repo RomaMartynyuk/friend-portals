@@ -26,7 +26,7 @@ async function position(game) {
   return [Number(await shell.getAttribute('data-player-x')), Number(await shell.getAttribute('data-player-z'))];
 }
 async function moveTo(page, game, x, z, camera = 'echo', tolerance = 0.52) {
-  const angle = camera === 'echo' ? [7, 13] : camera === 'balance' ? [8, 15] : camera === 'temple' ? [7.5, 13] : [10, 18];
+  const angle = camera === 'echo' ? [7, 13] : camera === 'balance' ? [8, 15] : camera === 'celestial' ? [8, 16] : camera === 'temple' ? [7.5, 13] : [10, 18];
   const length = Math.hypot(...angle), right = [angle[1] / length, -angle[0] / length], back = [angle[0] / length, angle[1] / length];
   for (let step = 0; step < 100; step++) {
     const [px, pz] = await position(game), dx = x - px, dz = z - pz;
@@ -57,6 +57,32 @@ async function balanceStatus(game) {
   const match = text.match(/layout (\d+); stage (\d+); phase ([^;]+); blocks ([^;]+); A (\d+)\/(\d+); B (\d+)\/(\d+); C (\d+)\/(\d+)/);
   if (!match) throw new Error(`Could not parse Balance status: ${text}`);
   return { layout: Number(match[1]), stage: Number(match[2]), phase: match[3], blocks: match[4].split('|').map(pair => pair.split(',').map(Number)), weights: [Number(match[5]), Number(match[7]), Number(match[9])], targets: [Number(match[6]), Number(match[8]), Number(match[10])] };
+}
+async function celestialStatus(game) {
+  const text = (await game.getByTestId('celestial-state').textContent()) ?? '';
+  const match = text.match(/constellation (\d+); phase ([^;]+); locked (\d+); retry (\w+)/);
+  if (!match) throw new Error(`Could not parse Celestial status: ${text}`);
+  return { constellation: Number(match[1]), phase: match[2], locked: Number(match[3]), retry: match[4] };
+}
+const celestialControls = [[-5.3, 1.5], [0, 4.65], [5.3, 1.5]];
+async function lockCelestial(page, game, ring, mobile = false) {
+  const name = ['OUTER', 'MIDDLE', 'INNER'][ring];
+  await moveTo(page, game, ...celestialControls[ring], 'celestial', 0.72);
+  const prompt = game.getByRole('button', { name: `E LOCK ${name} RING` });
+  if (!mobile) await prompt.waitFor();
+  if (mobile && !(await promptText(game))?.includes(`LOCK ${name} RING`)) throw new Error(`Mobile ${name} control prompt is not active.`);
+  for (let attempt = 0; attempt < 650; attempt++) {
+    const value = Number(await game.locator('main.game-shell').getAttribute(`data-celestial-error${ring}`));
+    if (Number.isFinite(value) && value < 0.12) {
+      if (mobile) await game.getByRole('button', { name: 'ACTION' }).click();
+      else await prompt.click();
+      const result = await celestialStatus(game);
+      if (result.locked !== ring + 1) throw new Error(`Ring ${name} missed inside test timing window: ${JSON.stringify(result)}, sampled error ${value}`);
+      return;
+    }
+    await page.waitForTimeout(45);
+  }
+  throw new Error(`No alignment window appeared for ${name}.`);
 }
 async function pushBalance(page, game, block, direction, { mobile = false, rapid = false, settle = true } = {}) {
   const before = await balanceStatus(game), cell = before.blocks[block];
@@ -266,6 +292,78 @@ await testGame('.', {
     await game.getByRole('button', { name: /ENTER PORTAL III/ }).click();
     if ((await balanceStatus(game)).phase !== 'claimed') throw new Error('Completed Balance Temple lost its restored state.');
     if (await game.getByRole('button', { name: /CLAIM SHARD/ }).count()) throw new Error('Duplicate Shard III claim on re-entry.');
+    await moveTo(page, game, 0, 7.2, 'balance', 0.3);
+    await game.getByRole('button', { name: /RETURN TO ISLAND/ }).click();
+    await game.getByText('THE FLOATING ISLE').waitFor();
+    await moveTo(page, game, -6.4, 0, 'island', 1.8);
+    await game.getByRole('button', { name: /ENTER PORTAL IV/ }).click();
+    await game.locator('.scene-title').getByText('CELESTIAL OBSERVATORY').waitFor();
+    if ((await celestialStatus(game)).constellation !== 4) throw new Error('Fixed seed did not select The Voyager.');
+    await page.waitForTimeout(2050);
+    await page.screenshot({ path: './artifacts/celestial-observatory.png' });
+    await game.getByTestId('celestial-state').filter({ hasText: /phase running/ }).waitFor({ timeout: 12000 });
+    await moveTo(page, game, 0, 2.95, 'celestial', 0.6);
+    await game.getByRole('button', { name: /VIEW CONSTELLATION/ }).click();
+    if ((await celestialStatus(game)).phase !== 'clue') throw new Error('Observation pedestal did not reveal the clue.');
+    if ((await celestialStatus(game)).constellation !== 4) throw new Error('Viewing the clue changed the constellation.');
+    await game.getByTestId('celestial-state').filter({ hasText: /phase running/ }).waitFor({ timeout: 12000 });
+    await moveTo(page, game, ...celestialControls[0], 'celestial', 0.72);
+    const outerPrompt = game.getByRole('button', { name: /LOCK OUTER RING/ });
+    await outerPrompt.waitFor();
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const error = Number(await game.locator('main.game-shell').getAttribute('data-celestial-error0'));
+      if (error > 0.7) break;
+      await page.waitForTimeout(45);
+    }
+    await outerPrompt.click();
+    if ((await celestialStatus(game)).phase !== 'retry' || (await celestialStatus(game)).locked !== 0) throw new Error('Miss reset more than the current ring.');
+    await game.getByTestId('celestial-state').filter({ hasText: /phase running/ }).waitFor();
+    await lockCelestial(page, game, 0);
+    await game.getByRole('button', { name: /RESET OBSERVATORY/ }).click();
+    if ((await celestialStatus(game)).locked !== 0 || (await celestialStatus(game)).constellation !== 4) throw new Error('Observatory reset changed the run configuration.');
+    await page.waitForTimeout(150);
+    if (Math.abs(Number(await game.locator('main.game-shell').getAttribute('data-celestial-angle0')) - 119 * Math.PI / 180) > 0.02) throw new Error('Reset did not restore the seeded Outer starting angle.');
+    await moveTo(page, game, 0, 7.38, 'celestial', 0.32);
+    await game.getByRole('button', { name: /LEAVE OBSERVATORY/ }).click();
+    await game.getByText('THE FLOATING ISLE').waitFor();
+    for (let attempt = 0; attempt < 10 && (await game.locator('main.game-shell').getAttribute('data-celestial-voices')) !== '0'; attempt++) await page.waitForTimeout(80);
+    if ((await game.locator('main.game-shell').getAttribute('data-celestial-voices')) !== '0') throw new Error('Celestial audio continued after leaving.');
+    if ((await game.getByTestId('portal-status').textContent()) !== 'Portal 1 complete. Portal 2 complete. Portal 3 complete. Portal 4 active') throw new Error('Early Observatory exit changed progression.');
+    await moveTo(page, game, -6.4, 0, 'island', 1.8);
+    await game.getByRole('button', { name: /ENTER PORTAL IV/ }).click();
+    if ((await celestialStatus(game)).constellation !== 4 || (await celestialStatus(game)).locked !== 0) throw new Error('Observatory re-entry changed seeded state.');
+    await game.getByTestId('celestial-state').filter({ hasText: /phase running/ }).waitFor({ timeout: 12000 });
+    await lockCelestial(page, game, 0);
+    await page.setViewportSize({ width: 360, height: 800 });
+    if (!(await game.locator('.celestial-readout').isVisible())) throw new Error('Celestial HUD hidden on phone.');
+    const celestialPad = await game.getByRole('group', { name: 'Movement joystick' }).boundingBox();
+    if (!celestialPad) throw new Error('Celestial joystick missing.');
+    const beforeCelestialStick = await position(game), starX = celestialPad.x + celestialPad.width / 2, starY = celestialPad.y + celestialPad.height / 2;
+    await page.mouse.move(starX, starY); await page.mouse.down(); await page.mouse.move(starX + 20, starY, { steps: 3 }); await page.waitForTimeout(260); await page.mouse.up();
+    if (Math.hypot(...(await position(game)).map((value, index) => value - beforeCelestialStick[index])) < 0.1) throw new Error('Celestial joystick did not move the Friend.');
+    await lockCelestial(page, game, 1, true);
+    await page.screenshot({ path: './artifacts/celestial-mobile.png' });
+    await page.setViewportSize({ width: 960, height: 800 });
+    await lockCelestial(page, game, 2);
+    await game.getByTestId('celestial-state').filter({ hasText: /phase finale/ }).waitFor();
+    await game.getByTestId('celestial-state').filter({ hasText: /phase shard-ready/ }).waitFor({ timeout: 12000 });
+    await page.screenshot({ path: './artifacts/celestial-complete.png' });
+    await moveTo(page, game, 0, -1.3, 'celestial', 0.9);
+    await game.getByRole('button', { name: /CLAIM FINAL SHARD/ }).click();
+    await game.getByText('FINAL PORTAL SHARD ACQUIRED').waitFor();
+    if (!(await game.getByTestId('shard-count').textContent())?.includes('SHARDS 4 / 4')) throw new Error('Final shard not counted.');
+    await game.getByRole('button', { name: /CLAIM FINAL SHARD/ }).waitFor({ state: 'hidden' });
+    await moveTo(page, game, 0, 7.38, 'celestial', 0.32);
+    await game.getByRole('button', { name: /RETURN TO ISLAND/ }).click();
+    await game.getByText('THE FLOATING ISLE').waitFor();
+    if ((await game.getByTestId('portal-status').textContent()) !== 'Portal 1 complete. Portal 2 complete. Portal 3 complete. Portal 4 complete') throw new Error('Four-portal completion is incorrect.');
+    await page.waitForTimeout(3100);
+    await game.getByText('THE MONUMENT IS READY').waitFor();
+    await page.screenshot({ path: './artifacts/island-four-shards.png' });
+    await moveTo(page, game, -6.4, 0, 'island', 1.8);
+    await game.getByRole('button', { name: /ENTER PORTAL IV/ }).click();
+    if ((await celestialStatus(game)).phase !== 'claimed') throw new Error('Completed Observatory did not remain aligned.');
+    if (await game.getByRole('button', { name: /CLAIM FINAL SHARD/ }).count()) throw new Error('Duplicate final shard claim on re-entry.');
   },
 });
 await testGame('.', { width: 360, screenshot: './artifacts/mobile.png', check: async ({ page, game }) => {

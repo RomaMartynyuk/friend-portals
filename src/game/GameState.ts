@@ -5,7 +5,8 @@ import type { RuneId } from '../portals/echo/echoConfig';
 import { createRunSeed, type RunSeed } from './seededRun';
 import { lightVariantForSeed } from '../portals/light/LightPuzzleState';
 import { finishBalanceMechanism, initialBalancePuzzle, pushBalanceBlock, resetBalancePuzzle, revealBalanceShard, type BalancePuzzleState, type PushDirection } from '../portals/balance/BalancePuzzleState';
-export type SceneId = 'ISLAND' | 'TEMPLE_LIGHT' | 'ECHO_GARDEN' | 'TEMPLE_BALANCE';
+import { initialCelestialPuzzle, materializeCelestialShard, resetCelestialPuzzle, type CelestialPuzzleState } from '../portals/celestial/CelestialPuzzleState';
+export type SceneId = 'ISLAND' | 'TEMPLE_LIGHT' | 'ECHO_GARDEN' | 'TEMPLE_BALANCE' | 'CELESTIAL_OBSERVATORY';
 export type PortalStatus = 'active' | 'locked' | 'complete';
 export type GameState = Readonly<{
   runSeed: RunSeed;
@@ -14,16 +15,17 @@ export type GameState = Readonly<{
   light: LightPuzzleState;
   echo: EchoPuzzleState;
   balance: BalancePuzzleState;
+  celestial: CelestialPuzzleState;
   pendingIslandEvent: number | null;
   islandEvent: number | null;
 }>;
 export function createInitialGameState(runSeed: RunSeed): GameState {
-  return { runSeed, scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), balance: initialBalancePuzzle(runSeed), pendingIslandEvent: null, islandEvent: null };
+  return { runSeed, scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), balance: initialBalancePuzzle(runSeed), celestial: initialCelestialPuzzle(runSeed), pendingIslandEvent: null, islandEvent: null };
 }
 export function restoreGameState(progress: GameProgress): GameState {
-  return { ...createInitialGameState(progress.runSeed), completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo, balance: progress.balance };
+  return { ...createInitialGameState(progress.runSeed), completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo, balance: progress.balance, celestial: progress.celestial };
 }
-export function gameProgress(state: GameState): GameProgress { return { runSeed: state.runSeed, completedPortals: state.completedPortals, light: state.light, echo: state.echo, balance: state.balance }; }
+export function gameProgress(state: GameState): GameProgress { return { runSeed: state.runSeed, completedPortals: state.completedPortals, light: state.light, echo: state.echo, balance: state.balance, celestial: state.celestial }; }
 /** A normal new journey guarantees an immediately different light configuration. */
 export function startNewJourney(previous: GameState, fixedSeed?: RunSeed): GameState {
   if (fixedSeed !== undefined) return createInitialGameState(fixedSeed);
@@ -42,6 +44,7 @@ export function enterPortal(state: GameState, portal: number): GameState {
   if (portal === 1) return { ...state, scene: 'TEMPLE_LIGHT', islandEvent: null };
   if (portal === 2) return { ...state, scene: 'ECHO_GARDEN', echo: prepareEchoEntry(state.echo), islandEvent: null };
   if (portal === 3) return { ...state, scene: 'TEMPLE_BALANCE', islandEvent: null };
+  if (portal === 4) return { ...state, scene: 'CELESTIAL_OBSERVATORY', islandEvent: null };
   return state;
 }
 export function rotateCrystal(state: GameState, crystal: CrystalId): GameState {
@@ -101,4 +104,19 @@ export function materializeBalanceShard(state: GameState): GameState {
 export function claimBalanceShard(state: GameState): GameState {
   if (state.scene !== 'TEMPLE_BALANCE' || state.balance.phase !== 'shard-ready' || state.completedPortals.includes(3)) return state;
   return { ...state, balance: { ...state.balance, phase: 'claimed' }, completedPortals: [...state.completedPortals, 3], pendingIslandEvent: 3 };
+}
+export function saveCelestialState(state: GameState, celestial: CelestialPuzzleState): GameState {
+  return state.scene === 'CELESTIAL_OBSERVATORY' ? { ...state, celestial } : state;
+}
+export function resetCelestial(state: GameState): GameState {
+  if (state.scene !== 'CELESTIAL_OBSERVATORY') return state;
+  const celestial = resetCelestialPuzzle(state.celestial, state.runSeed);
+  return celestial === state.celestial ? state : { ...state, celestial };
+}
+export function revealCelestialShard(state: GameState): GameState {
+  return state.scene === 'CELESTIAL_OBSERVATORY' ? { ...state, celestial: materializeCelestialShard(state.celestial) } : state;
+}
+export function claimCelestialShard(state: GameState): GameState {
+  if (state.scene !== 'CELESTIAL_OBSERVATORY' || state.celestial.phase !== 'shard-ready' || state.completedPortals.includes(4)) return state;
+  return { ...state, celestial: { ...state.celestial, phase: 'claimed' }, completedPortals: [...state.completedPortals, 4], pendingIslandEvent: 4 };
 }

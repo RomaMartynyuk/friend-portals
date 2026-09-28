@@ -2,7 +2,7 @@ import { Canvas } from '@react-three/fiber';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameComponentProps } from '@rarefriends/friendsdk/runtime';
 import { gameSession } from '../sdk/friendSdkAdapter';
-import { claimShard, claimEchoShard, claimBalanceShard, enterEchoRune, startEchoInput, replayEchoRound, nextEchoRound, materializeEchoShard, materializeBalanceShard, moveBalanceBlock, resetBalance, settleBalance, enterPortal, finishIslandEvent, gameProgress, portalStatus, resetPuzzle, restoreGameState, returnToIsland, revealShard, rotateCrystal, type GameState } from './GameState';
+import { claimShard, claimEchoShard, claimBalanceShard, claimCelestialShard, enterEchoRune, startEchoInput, replayEchoRound, nextEchoRound, materializeEchoShard, materializeBalanceShard, moveBalanceBlock, resetBalance, resetCelestial, settleBalance, enterPortal, finishIslandEvent, gameProgress, portalStatus, resetPuzzle, restoreGameState, returnToIsland, revealShard, revealCelestialShard, rotateCrystal, saveCelestialState, type GameState } from './GameState';
 import { sessionProgressStore } from './ProgressStore';
 import { crystalPositions, traceLight, type CrystalId } from '../portals/light/LightPuzzleState';
 import { echoRunes, echoTriggerRadius, type RuneId } from '../portals/echo/echoConfig';
@@ -12,6 +12,10 @@ import { EchoGarden } from '../portals/echo/EchoGarden';
 import { balanceWalkable, plateWeights, pushBalanceBlock, type PushDirection } from '../portals/balance/BalancePuzzleState';
 import { balanceLayouts, gridToWorld } from '../portals/balance/balanceLayouts';
 import { BalanceTemple } from '../portals/balance/BalanceTemple';
+import { CelestialObservatory } from '../portals/celestial/CelestialObservatory';
+import { celestialControlPositions } from '../portals/celestial/CelestialControl';
+import { angularError, advanceCelestial, beginCelestialMotion, lockCelestialRing, PERFECT_WINDOW, resetCelestialPuzzle, showConstellationClue, targetAngle, type CelestialPuzzleState } from '../portals/celestial/CelestialPuzzleState';
+import { celestialConfigForSeed, ringNames, type RingId } from '../portals/celestial/celestialConfig';
 import { useMovementInput } from '../input/useMovementInput';
 import { AudioManager } from '../audio/AudioManager';
 import { Island } from '../world/Island';
@@ -22,7 +26,7 @@ import { HUD } from '../ui/HUD';
 import { MobileControls } from '../ui/MobileControls';
 import '../../style.css';
 
-type Nearby = Readonly<{ type: 'portal' | 'crystal' | 'shard' | 'echo-shard' | 'balance-shard' | 'balance-block' | 'exit' | 'unavailable'; id: number; label: string; actionable: boolean }>;
+type Nearby = Readonly<{ type: 'portal' | 'crystal' | 'shard' | 'echo-shard' | 'balance-shard' | 'balance-block' | 'celestial-control' | 'celestial-observe' | 'celestial-shard' | 'exit' | 'unavailable'; id: number; label: string; actionable: boolean }>;
 const sameNearby = (a: Nearby | null, b: Nearby | null) => a?.type === b?.type && a?.id === b?.id && a?.label === b?.label;
 export default function Game(props: GameComponentProps) {
   const session = gameSession(props);
@@ -54,15 +58,26 @@ export default function Game(props: GameComponentProps) {
   const [balanceClaiming, setBalanceClaiming] = useState(false);
   const [balanceResistedBlock, setBalanceResistedBlock] = useState<number | null>(null);
   const [balanceCallout, setBalanceCallout] = useState<string | null>(null);
+  const [celestialCallout, setCelestialCallout] = useState<string | null>(null);
+  const [celestialFinalStep, setCelestialFinalStep] = useState(0);
+  const [celestialMissedRing, setCelestialMissedRing] = useState<RingId | null>(null);
+  const [celestialPerfectRing, setCelestialPerfectRing] = useState<RingId | null>(null);
+  const [celestialClaiming, setCelestialClaiming] = useState(false);
   const introSeen = useRef(false);
   const echoIntroSeen = useRef(false);
   const balanceIntroSeen = useRef(false);
+  const celestialIntroSeen = useRef(false);
   const echoOccupiedRune = useRef<RuneId | null>(null);
   const echoStateRef = useRef(state.echo); echoStateRef.current = state.echo;
   const echoClaimingLock = useRef(false);
   const balanceClaimingLock = useRef(false);
   const balancePushLock = useRef(false);
   const balancePushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const celestialClaimingLock = useRef(false);
+  const celestialPerfectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const celestialLastTick = useRef(0);
+  const celestialConfig = useMemo(() => celestialConfigForSeed(state.runSeed), [state.runSeed]);
+  const celestialMotion = useRef<{ base: CelestialPuzzleState; at: number }>({ base: state.celestial, at: performance.now() });
   const echoEffectTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const rotating = useRef(false);
   const claimingLock = useRef(false);
@@ -79,19 +94,35 @@ export default function Game(props: GameComponentProps) {
       return next;
     });
   }, [props.friendId]);
+  const liveCelestial = useCallback(() => {
+    const motion = celestialMotion.current;
+    return advanceCelestial(motion.base, celestialConfig, props.paused ? 0 : (performance.now() - motion.at) / 1000);
+  }, [celestialConfig, props.paused]);
+  const setCelestialSnapshot = useCallback((next: CelestialPuzzleState) => {
+    celestialMotion.current = { base: next, at: performance.now() };
+    updateState(previous => saveCelestialState(previous, next));
+  }, [updateState]);
+  const onCelestialSymbolPass = useCallback((ring: RingId) => {
+    if (props.paused || ring !== celestialMotion.current.base.lockedCount) return;
+    const now = performance.now();
+    if (now - celestialLastTick.current > 280) { celestialLastTick.current = now; audio.play('celestial-tick'); }
+  }, [props.paused, audio]);
   const exitRoom = useCallback(() => {
     if (transitionLock.current) return;
     transitionLock.current = true;
     if (rotationTimer.current) clearTimeout(rotationTimer.current);
     if (claimTimer.current) clearTimeout(claimTimer.current);
     if (balancePushTimer.current) clearTimeout(balancePushTimer.current);
-    rotating.current = false; claimingLock.current = false; echoClaimingLock.current = false; balanceClaimingLock.current = false; balancePushLock.current = false;
+    if (celestialPerfectTimer.current) clearTimeout(celestialPerfectTimer.current);
+    rotating.current = false; claimingLock.current = false; echoClaimingLock.current = false; balanceClaimingLock.current = false; balancePushLock.current = false; celestialClaimingLock.current = false;
     stopEchoEffects(); setEchoClaiming(false); echoOccupiedRune.current = null;
     audio.stopBalance(); setBalanceClaiming(false); setBalanceResistedBlock(null); setBalanceCallout(null);
+    audio.stopCelestial(); setCelestialClaiming(false); setCelestialMissedRing(null); setCelestialPerfectRing(null); setCelestialCallout(null);
     setBeamBroken(false); setClaiming(false);
-    updateState(returnToIsland);
+    const snapshot = liveCelestial();
+    updateState(previous => returnToIsland(previous.scene === 'CELESTIAL_OBSERVATORY' ? saveCelestialState(previous, snapshot) : previous));
     setTimeout(() => { transitionLock.current = false; }, 350);
-  }, [updateState, stopEchoEffects, audio]);
+  }, [updateState, stopEchoEffects, audio, liveCelestial]);
   const reset = useCallback(() => {
     if (props.paused) return;
     if (state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing') {
@@ -102,8 +133,14 @@ export default function Game(props: GameComponentProps) {
       if (balancePushTimer.current) clearTimeout(balancePushTimer.current);
       balancePushLock.current = false; setBalanceResistedBlock(null); setBalanceChargeStep(0); setBalanceCallout(null);
       audio.stopBalance(); audio.play('balance-slide'); setBalanceResetVersion(value => value + 1); updateState(resetBalance);
+    } else if (state.scene === 'CELESTIAL_OBSERVATORY' && state.celestial.phase !== 'claimed' && state.celestial.phase !== 'shard-ready') {
+      const next = resetCelestialPuzzle(state.celestial, state.runSeed);
+      if (celestialPerfectTimer.current) clearTimeout(celestialPerfectTimer.current);
+      audio.stopCelestial(); audio.play('celestial-control'); setCelestialMissedRing(null); setCelestialPerfectRing(null); setCelestialFinalStep(0); setCelestialCallout(null);
+      celestialMotion.current = { base: next, at: performance.now() };
+      updateState(resetCelestial);
     }
-  }, [state.scene, state.light.phase, state.balance.phase, props.paused, updateState, audio]);
+  }, [state.scene, state.light.phase, state.balance.phase, state.celestial, state.runSeed, props.paused, updateState, audio]);
   const interact = useCallback(() => {
     const near = nearRef.current;
     if (!near?.actionable || props.paused || status !== 'ready' || transitionLock.current) return;
@@ -138,6 +175,33 @@ export default function Game(props: GameComponentProps) {
       else if (outcome.balanced.length) audio.play('balance-plate');
       else audio.play('balance-under');
       balancePushTimer.current = setTimeout(() => { balancePushLock.current = false; }, reducedMotion ? 110 : 310);
+    } else if (near.type === 'celestial-observe') {
+      const live = liveCelestial();
+      if (live.phase !== 'running') return;
+      setCelestialSnapshot(showConstellationClue(live)); audio.play('celestial-control'); setCelestialCallout(null);
+    } else if (near.type === 'celestial-control') {
+      const ring = near.id as RingId, [px, , pz] = celestialControlPositions[ring], [x, z] = playerPosition.current;
+      if (Math.hypot(x - px, z - pz) > 1.58) return;
+      const result = lockCelestialRing(liveCelestial(), ring);
+      if (result.verdict === 'ignored') return;
+      setCelestialSnapshot(result.next); audio.play('celestial-control');
+      if (result.verdict === 'miss') { setCelestialMissedRing(ring); setCelestialCallout('ALMOST · WATCH THE MARKER'); audio.play('celestial-miss'); }
+      else {
+        const perfect = result.error <= PERFECT_WINDOW;
+        setCelestialMissedRing(null); setCelestialPerfectRing(perfect ? ring : null);
+        if (celestialPerfectTimer.current) clearTimeout(celestialPerfectTimer.current);
+        if (perfect) celestialPerfectTimer.current = setTimeout(() => setCelestialPerfectRing(null), 700);
+        setCelestialCallout(perfect ? 'PERFECT ALIGNMENT' : result.verdict === 'finale' ? 'THE STARS REMEMBER' : 'RING ALIGNED');
+        audio.play(perfect ? 'celestial-perfect' : 'celestial-lock');
+      }
+    } else if (near.type === 'celestial-shard') {
+      if (celestialClaimingLock.current || state.celestial.phase !== 'shard-ready') return;
+      celestialClaimingLock.current = true; setCelestialClaiming(true); audio.play('celestial-shard-claim');
+      claimTimer.current = setTimeout(() => {
+        updateState(claimCelestialShard); celestialMotion.current = { base: { ...celestialMotion.current.base, phase: 'claimed' }, at: performance.now() };
+        nearRef.current = null; setNearby(null); setCelestialClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 220); setBanner('FINAL PORTAL SHARD ACQUIRED');
+        setTimeout(() => setBanner(null), 2500);
+      }, reducedMotion ? 120 : 820);
     } else if (near.type === 'balance-shard') {
       if (balanceClaimingLock.current || state.balance.phase !== 'shard-ready') return;
       balanceClaimingLock.current = true; setBalanceClaiming(true); audio.play('balance-shard-claim');
@@ -160,7 +224,7 @@ export default function Game(props: GameComponentProps) {
         setTimeout(() => setBanner(null), 2100);
       }, reducedMotion ? 120 : 700);
     }
-  }, [props.paused, status, state.light.phase, state.echo.phase, state.balance, reducedMotion, audio, updateState, exitRoom]);
+  }, [props.paused, status, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, reducedMotion, audio, updateState, exitRoom, liveCelestial, setCelestialSnapshot]);
   const input = useMovementInput(props.paused || status !== 'ready', interact);
   useEffect(() => { let active = true; setStatus('loading'); void props.client.read().then(snapshot => {
     if (!active) return;
@@ -169,11 +233,20 @@ export default function Game(props: GameComponentProps) {
     setStatus('ready');
   }).catch(cause => { if (active) { setError(cause instanceof Error ? cause.message : 'Unable to open the game.'); setStatus('error'); } });
   return () => { active = false; }; }, [props.client, props.friendId]);
-  useEffect(() => () => { audio.dispose(); if (rotationTimer.current) clearTimeout(rotationTimer.current); if (claimTimer.current) clearTimeout(claimTimer.current); if (balancePushTimer.current) clearTimeout(balancePushTimer.current); for (const timer of echoEffectTimers.current) clearTimeout(timer); }, [audio]);
+  useEffect(() => () => { audio.dispose(); if (rotationTimer.current) clearTimeout(rotationTimer.current); if (claimTimer.current) clearTimeout(claimTimer.current); if (balancePushTimer.current) clearTimeout(balancePushTimer.current); if (celestialPerfectTimer.current) clearTimeout(celestialPerfectTimer.current); for (const timer of echoEffectTimers.current) clearTimeout(timer); }, [audio]);
+  useEffect(() => {
+    const current = celestialMotion.current;
+    celestialMotion.current = { base: props.paused ? advanceCelestial(current.base, celestialConfig, (performance.now() - current.at) / 1000) : current.base, at: performance.now() };
+  }, [props.paused, celestialConfig]);
   useEffect(() => { const media = window.matchMedia('(prefers-reduced-motion: reduce)'); const update = () => setReducedMotion(media.matches); media.addEventListener('change', update); return () => media.removeEventListener('change', update); }, []);
   useEffect(() => {
     nearRef.current = null; setNearby(null); input.setTouch({ x: 0, z: 0 });
     echoOccupiedRune.current = null;
+    if (state.scene === 'CELESTIAL_OBSERVATORY') {
+      celestialMotion.current = { base: state.celestial, at: performance.now() };
+      audio.play('celestial-ambience');
+      if (!celestialIntroSeen.current) { celestialIntroSeen.current = true; setIntro(true); const timer = setTimeout(() => setIntro(false), 1800); return () => clearTimeout(timer); }
+    }
     if (state.scene === 'TEMPLE_BALANCE' && !balanceIntroSeen.current) {
       balanceIntroSeen.current = true; setIntro(true); const timer = setTimeout(() => setIntro(false), 2600); return () => clearTimeout(timer);
     }
@@ -254,6 +327,41 @@ export default function Game(props: GameComponentProps) {
     ];
     return () => timers.forEach(clearTimeout);
   }, [state.scene, state.balance.phase, props.paused, reducedMotion, audio, updateState]);
+  useEffect(() => {
+    if (state.scene !== 'CELESTIAL_OBSERVATORY' || state.celestial.phase !== 'clue' || props.paused) return;
+    setCelestialCallout(null);
+    const timer = setTimeout(() => { setCelestialSnapshot(beginCelestialMotion(celestialMotion.current.base)); audio.play('celestial-ring'); }, 5000);
+    return () => clearTimeout(timer);
+  }, [state.scene, state.celestial.phase, props.paused, audio, setCelestialSnapshot]);
+  useEffect(() => {
+    if (state.scene !== 'CELESTIAL_OBSERVATORY' || state.celestial.phase !== 'retry' || props.paused) return;
+    const timer = setTimeout(() => { setCelestialMissedRing(null); setCelestialCallout(null); setCelestialSnapshot(beginCelestialMotion(celestialMotion.current.base)); audio.play('celestial-ring'); }, reducedMotion ? 450 : 760);
+    return () => clearTimeout(timer);
+  }, [state.scene, state.celestial.phase, props.paused, reducedMotion, audio, setCelestialSnapshot]);
+  useEffect(() => {
+    if (state.scene !== 'CELESTIAL_OBSERVATORY' || state.celestial.phase !== 'finale' || props.paused) return;
+    audio.stopCelestial(); setCelestialCallout('THE STARS REMEMBER'); setCelestialFinalStep(0);
+    const timers = [
+      setTimeout(() => { setCelestialFinalStep(1); audio.play('celestial-lock'); }, 550),
+      setTimeout(() => { setCelestialFinalStep(2); audio.play('celestial-formation'); }, 1450),
+      setTimeout(() => { setCelestialFinalStep(3); audio.play('celestial-star'); }, 3000),
+      setTimeout(() => { setCelestialFinalStep(4); audio.play('celestial-star'); }, 4300),
+      setTimeout(() => { setCelestialCallout(null); updateState(revealCelestialShard); audio.play('celestial-shard-materialize'); }, reducedMotion ? 2400 : 5650),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, [state.scene, state.celestial.phase, props.paused, reducedMotion, audio, updateState]);
+  useEffect(() => {
+    if (state.scene !== 'CELESTIAL_OBSERVATORY') return;
+    const timer = setInterval(() => {
+      if (!gameShell.current) return;
+      const current = liveCelestial();
+      for (const ring of [0, 1, 2] as const) {
+        gameShell.current.dataset[`celestialAngle${ring}`] = current.angles[ring].toFixed(4);
+        gameShell.current.dataset[`celestialError${ring}`] = angularError(current.angles[ring], targetAngle(current, ring)).toFixed(4);
+      }
+    }, 110);
+    return () => clearInterval(timer);
+  }, [state.scene, liveCelestial]);
   const seals = traceLight(state.light).seals;
   const previousSeals = useRef(seals);
   useEffect(() => {
@@ -267,7 +375,7 @@ export default function Game(props: GameComponentProps) {
     const interval = setInterval(() => {
       const value = Math.min(1, (performance.now() - start) / (reducedMotion ? 500 : 2800));
       setUnlockProgress(value);
-      if (!activated && value > 0.76) { activated = true; audio.play(state.islandEvent === 3 ? 'balance-portal-unlock' : state.islandEvent === 2 ? 'echo-portal-unlock' : 'portal-unlock'); }
+      if (!activated && value > 0.76) { activated = true; audio.play(state.islandEvent === 4 ? 'celestial-formation' : state.islandEvent === 3 ? 'balance-portal-unlock' : state.islandEvent === 2 ? 'echo-portal-unlock' : 'portal-unlock'); }
       if (value >= 1) { clearInterval(interval); updateState(finishIslandEvent); }
     }, 35);
     return () => clearInterval(interval);
@@ -289,15 +397,15 @@ export default function Game(props: GameComponentProps) {
   }, [props.paused, updateState, audio, scheduleEcho]);
   const reportPosition = useCallback((x: number, z: number) => {
     playerPosition.current = [x, z];
-    if (gameShell.current) { gameShell.current.dataset.playerX = x.toFixed(2); gameShell.current.dataset.playerZ = z.toFixed(2); }
+    if (gameShell.current) { gameShell.current.dataset.playerX = x.toFixed(2); gameShell.current.dataset.playerZ = z.toFixed(2); gameShell.current.dataset.celestialVoices = String(audio.celestialVoiceCount()); }
     let next: Nearby | null = null;
     if (state.scene === 'ISLAND') {
       for (let i = 0; i < portalConfig.length; i++) {
         const p = portalConfig[i];
         if (Math.hypot(x - p.x, z - p.z) < 2.25) {
           const status = portalStatus(state, i + 1);
-          next = i < 3 && status !== 'locked' ? { type: 'portal', id: i + 1, label: `ENTER PORTAL ${['I', 'II', 'III'][i]}`, actionable: true }
-            : { type: 'unavailable', id: i + 1, label: status === 'active' ? `${p.name} · PHASE ${i + 2}` : 'PORTAL LOCKED', actionable: false };
+          next = status !== 'locked' ? { type: 'portal', id: i + 1, label: `ENTER PORTAL ${['I', 'II', 'III', 'IV'][i]}`, actionable: true }
+            : { type: 'unavailable', id: i + 1, label: 'PORTAL LOCKED', actionable: false };
           break;
         }
       }
@@ -314,26 +422,35 @@ export default function Game(props: GameComponentProps) {
       if (occupied !== echoOccupiedRune.current) { echoOccupiedRune.current = occupied; if (occupied !== null) onEchoRuneEntry(occupied); }
       if (state.echo.phase === 'shard-ready' && Math.hypot(x, z) < 1.7) next = { type: 'echo-shard', id: 2, label: 'CLAIM SHARD', actionable: true };
       if (!next && Math.hypot(x, z - 6.25) < 1.65) next = { type: 'exit', id: 0, label: state.echo.phase === 'claimed' ? 'RETURN TO ISLAND' : 'LEAVE GARDEN', actionable: true };
-    } else {
+    } else if (state.scene === 'TEMPLE_BALANCE') {
       if (state.balance.phase === 'shard-ready' && Math.hypot(x, z + 6.1) < 1.75) next = { type: 'balance-shard', id: 3, label: 'CLAIM SHARD', actionable: true };
       if (!next && Math.abs(x) < 1.4 && z > 6.65 && z < 8.2) next = { type: 'exit', id: 0, label: state.balance.phase === 'claimed' ? 'RETURN TO ISLAND' : 'LEAVE TEMPLE', actionable: true };
       if (!next && state.balance.phase === 'routing') {
         let best = 1.62;
         state.balance.blocks.forEach((cell, id) => { const [bx, bz] = gridToWorld(cell), distance = Math.hypot(x - bx, z - bz); if (distance < best) { best = distance; next = { type: 'balance-block', id, label: `PUSH BLOCK ${String.fromCharCode(65 + id)} · WEIGHT ${'I'.repeat(balanceLayouts[state.balance.layout].blocks[id].weight)}`, actionable: true }; } });
       }
+    } else if (state.scene === 'CELESTIAL_OBSERVATORY') {
+      if (state.celestial.phase === 'shard-ready' && Math.hypot(x, z + 1.3) < 2.0) next = { type: 'celestial-shard', id: 4, label: 'CLAIM FINAL SHARD', actionable: true };
+      if (!next && Math.abs(x) < 1.35 && z > 6.65 && z < 8.1) next = { type: 'exit', id: 0, label: state.celestial.phase === 'claimed' ? 'RETURN TO ISLAND' : 'LEAVE OBSERVATORY', actionable: true };
+      if (!next && state.celestial.phase === 'running') {
+        const index = state.celestial.lockedCount;
+        if (index < 3) { const ring = index as RingId, [cx, , cz] = celestialControlPositions[ring]; if (Math.hypot(x - cx, z - cz) < 1.55) next = { type: 'celestial-control', id: ring, label: `LOCK ${ringNames[ring]} RING`, actionable: true }; }
+      }
+      if (!next && state.celestial.phase === 'running' && Math.hypot(x, z - 2.95) < 1.18) next = { type: 'celestial-observe', id: 0, label: 'VIEW CONSTELLATION', actionable: true };
     }
     if (!sameNearby(nearRef.current, next)) { nearRef.current = next; setNearby(next); }
-  }, [state.scene, state.light.phase, state.echo.phase, state.balance, state.completedPortals, onEchoRuneEntry]);
+  }, [state.scene, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, state.celestial.lockedCount, state.completedPortals, onEchoRuneEntry, audio]);
   if (status !== 'ready') return <div className="startup" role={status === 'error' ? 'alert' : 'status'}><strong>FRIEND PORTALS</strong><p>{status === 'error' ? error : 'Opening the island…'}</p>{status === 'error' && <button onClick={() => { setStatus('loading'); void props.client.read().then(() => setStatus('ready')).catch(cause => { setError(String(cause)); setStatus('error'); }); }}>RETRY</button>}</div>;
   return <main ref={gameShell} className="game-shell" aria-label="Friend Portals game" data-run-seed={state.runSeed}>
     <Canvas shadows dpr={[1, 1.5]} camera={{ fov: 42, near: 0.1, far: 90, position: [10, 14, 18] }} gl={{ antialias: true, powerPreference: 'high-performance' }}>
       {state.scene === 'ISLAND' ? <Island state={state} identitySeed={Number(props.friendId % 1000n)} reducedMotion={reducedMotion} unlockProgress={unlockProgress} />
         : state.scene === 'TEMPLE_LIGHT' ? <LightTemple light={state.light} highlightedCrystal={nearby?.type === 'crystal' ? nearby.id : null} resetVersion={resetVersion} beamBroken={beamBroken} chargeStep={chargeStep} claiming={claiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
         : state.scene === 'ECHO_GARDEN' ? <EchoGarden echo={state.echo} activeRune={echoActiveRune} wrongRune={echoWrongRune} pulseAll={echoPulseAll} claiming={echoClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
-          : <BalanceTemple balance={state.balance} nearbyBlock={nearby?.type === 'balance-block' ? nearby.id : null} resistedBlock={balanceResistedBlock} resetVersion={balanceResetVersion} chargeStep={balanceChargeStep} claiming={balanceClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />}
-      <Player key={state.scene} cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : state.scene === 'ECHO_GARDEN' ? [7, 11, 13] : [8, 11, 15]} reducedMotion={reducedMotion} identity={session.identity} vector={input.vector} onPosition={reportPosition} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : state.scene === 'ECHO_GARDEN' ? 7.7 : 8.8} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : state.scene === 'ECHO_GARDEN' ? [0, 3.9] : [0, 6.35]} canMove={state.scene === 'TEMPLE_BALANCE' ? (x, z) => balanceWalkable(state.balance, x, z) : undefined} />
+          : state.scene === 'TEMPLE_BALANCE' ? <BalanceTemple balance={state.balance} nearbyBlock={nearby?.type === 'balance-block' ? nearby.id : null} resistedBlock={balanceResistedBlock} resetVersion={balanceResetVersion} chargeStep={balanceChargeStep} claiming={balanceClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
+            : <CelestialObservatory state={state.celestial} config={celestialConfig} liveState={liveCelestial} finalStep={celestialFinalStep} missedRing={celestialMissedRing} perfectRing={celestialPerfectRing} claiming={celestialClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} onSymbolPass={onCelestialSymbolPass} />}
+      <Player key={state.scene} cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : state.scene === 'ECHO_GARDEN' ? [7, 11, 13] : state.scene === 'TEMPLE_BALANCE' ? [8, 11, 15] : [8, 12, 16]} reducedMotion={reducedMotion} identity={session.identity} vector={input.vector} onPosition={reportPosition} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : state.scene === 'ECHO_GARDEN' ? 7.7 : state.scene === 'TEMPLE_BALANCE' ? 8.8 : 8.25} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : state.scene === 'ECHO_GARDEN' ? [0, 3.9] : [0, 6.35]} canMove={state.scene === 'TEMPLE_BALANCE' ? (x, z) => balanceWalkable(state.balance, x, z) : undefined} />
     </Canvas>
-    <HUD friend={session.identity.label} scene={state.scene} nearby={nearby?.label ?? null} onInteract={interact} muted={muted} onToggleMute={() => { const next = !muted; setMuted(next); audio.setMuted(next); }} shards={state.completedPortals.length} seals={seals} canReset={state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing' || state.scene === 'TEMPLE_BALANCE' && state.balance.phase !== 'claimed' && state.balance.phase !== 'shard-ready'} onReset={reset} intro={intro} banner={banner} portalStatuses={[1, 2, 3, 4].map(portal => portalStatus(state, portal))} echo={state.echo} echoCallout={echoCallout} balance={state.balance} balanceCallout={balanceCallout} />
+    <HUD friend={session.identity.label} scene={state.scene} nearby={nearby?.label ?? null} onInteract={interact} muted={muted} onToggleMute={() => { const next = !muted; setMuted(next); audio.setMuted(next); }} shards={state.completedPortals.length} seals={seals} canReset={state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing' || state.scene === 'TEMPLE_BALANCE' && state.balance.phase !== 'claimed' && state.balance.phase !== 'shard-ready' || state.scene === 'CELESTIAL_OBSERVATORY' && state.celestial.phase !== 'claimed' && state.celestial.phase !== 'shard-ready'} onReset={reset} intro={intro} banner={banner} portalStatuses={[1, 2, 3, 4].map(portal => portalStatus(state, portal))} echo={state.echo} echoCallout={echoCallout} balance={state.balance} balanceCallout={balanceCallout} celestial={state.celestial} celestialCallout={celestialCallout} />
     <MobileControls onMove={input.setTouch} onInteract={interact} canInteract={Boolean(nearby?.actionable)} paused={props.paused} />
     {flash && <div className="shard-flash" aria-hidden="true" />}
     <div className="portrait-hint">Rotate your device to landscape for the best view.</div>

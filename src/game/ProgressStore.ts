@@ -1,10 +1,11 @@
 import { initialLightPuzzle, type LightPuzzleState } from '../portals/light/LightPuzzleState';
 import { initialEchoPuzzle, type EchoPuzzleState } from '../portals/echo/EchoPuzzleState';
 import { initialBalancePuzzle, type BalancePuzzleState } from '../portals/balance/BalancePuzzleState';
+import { initialCelestialPuzzle, type CelestialPuzzleState } from '../portals/celestial/CelestialPuzzleState';
 import { createRunSeed, type RunSeed } from './seededRun';
-export type GameProgress = Readonly<{ runSeed: RunSeed; completedPortals: readonly number[]; light: LightPuzzleState; echo: EchoPuzzleState; balance: BalancePuzzleState }>;
+export type GameProgress = Readonly<{ runSeed: RunSeed; completedPortals: readonly number[]; light: LightPuzzleState; echo: EchoPuzzleState; balance: BalancePuzzleState; celestial: CelestialPuzzleState }>;
 export function initialProgress(runSeed: RunSeed): GameProgress {
-  return { runSeed, completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), balance: initialBalancePuzzle(runSeed) };
+  return { runSeed, completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), balance: initialBalancePuzzle(runSeed), celestial: initialCelestialPuzzle(runSeed) };
 }
 export interface ProgressStore {
   read(friendId: bigint, fixedSeed?: RunSeed): GameProgress;
