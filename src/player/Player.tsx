@@ -1,12 +1,12 @@
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { MathUtils, Vector3, type Group } from 'three';
 import { FriendAvatar } from './FriendAvatar';
 import type { FriendIdentity } from '../sdk/friendIdentity';
 import type { InputVector } from '../input/useMovementInput';
-export function Player({ identity, vector, onPosition, bounds, spawn, reducedMotion, cameraOffset }: {
+export function Player({ identity, vector, onPosition, bounds, spawn, reducedMotion, cameraOffset, canMove }: {
   identity: FriendIdentity; vector: () => InputVector; onPosition: (x: number, z: number) => void;
-  bounds: number; spawn: [number, number]; reducedMotion: boolean; cameraOffset: readonly [number, number, number];
+  bounds: number; spawn: [number, number]; reducedMotion: boolean; cameraOffset: readonly [number, number, number]; canMove?: (x: number, z: number) => boolean;
 }) {
   const group = useRef<Group>(null);
   const moving = useRef(false);
@@ -16,6 +16,10 @@ export function Player({ identity, vector, onPosition, bounds, spawn, reducedMot
   const forward = useMemo(() => new Vector3(-offset.x, 0, -offset.z).normalize(), [offset]);
   const right = useMemo(() => new Vector3(-forward.z, 0, forward.x), [forward]);
   const lastReport = useRef(0);
+  useLayoutEffect(() => {
+    camera.position.set(spawn[0] + offset.x, offset.y, spawn[1] + offset.z);
+    camera.lookAt(spawn[0], 0.8, spawn[1]);
+  }, [camera, offset, spawn[0], spawn[1]]);
   useFrame((state, rawDelta) => {
     if (!group.current) return;
     const delta = Math.min(rawDelta, 0.05);
@@ -26,7 +30,7 @@ export function Player({ identity, vector, onPosition, bounds, spawn, reducedMot
       dir.normalize();
       const x = group.current.position.x + dir.x * 4.6 * delta;
       const z = group.current.position.z + dir.z * 4.6 * delta;
-      if (Math.hypot(x, z) < bounds) { group.current.position.x = x; group.current.position.z = z; }
+      if (Math.hypot(x, z) < bounds && (!canMove || canMove(x, z))) { group.current.position.x = x; group.current.position.z = z; }
       group.current.rotation.y = MathUtils.lerp(group.current.rotation.y, Math.atan2(dir.x, dir.z), 1 - Math.exp(-12 * delta));
     }
     const target = group.current.position;

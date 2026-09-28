@@ -4,7 +4,8 @@ import { initialEchoPuzzle, prepareEchoEntry, pauseEchoForExit, allowEchoInput, 
 import type { RuneId } from '../portals/echo/echoConfig';
 import { createRunSeed, type RunSeed } from './seededRun';
 import { lightVariantForSeed } from '../portals/light/LightPuzzleState';
-export type SceneId = 'ISLAND' | 'TEMPLE_LIGHT' | 'ECHO_GARDEN';
+import { finishBalanceMechanism, initialBalancePuzzle, pushBalanceBlock, resetBalancePuzzle, revealBalanceShard, type BalancePuzzleState, type PushDirection } from '../portals/balance/BalancePuzzleState';
+export type SceneId = 'ISLAND' | 'TEMPLE_LIGHT' | 'ECHO_GARDEN' | 'TEMPLE_BALANCE';
 export type PortalStatus = 'active' | 'locked' | 'complete';
 export type GameState = Readonly<{
   runSeed: RunSeed;
@@ -12,16 +13,17 @@ export type GameState = Readonly<{
   completedPortals: readonly number[];
   light: LightPuzzleState;
   echo: EchoPuzzleState;
+  balance: BalancePuzzleState;
   pendingIslandEvent: number | null;
   islandEvent: number | null;
 }>;
 export function createInitialGameState(runSeed: RunSeed): GameState {
-  return { runSeed, scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), pendingIslandEvent: null, islandEvent: null };
+  return { runSeed, scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), balance: initialBalancePuzzle(runSeed), pendingIslandEvent: null, islandEvent: null };
 }
 export function restoreGameState(progress: GameProgress): GameState {
-  return { ...createInitialGameState(progress.runSeed), completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo };
+  return { ...createInitialGameState(progress.runSeed), completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo, balance: progress.balance };
 }
-export function gameProgress(state: GameState): GameProgress { return { runSeed: state.runSeed, completedPortals: state.completedPortals, light: state.light, echo: state.echo }; }
+export function gameProgress(state: GameState): GameProgress { return { runSeed: state.runSeed, completedPortals: state.completedPortals, light: state.light, echo: state.echo, balance: state.balance }; }
 /** A normal new journey guarantees an immediately different light configuration. */
 export function startNewJourney(previous: GameState, fixedSeed?: RunSeed): GameState {
   if (fixedSeed !== undefined) return createInitialGameState(fixedSeed);
@@ -39,6 +41,7 @@ export function enterPortal(state: GameState, portal: number): GameState {
   if (state.scene !== 'ISLAND' || portalStatus(state, portal) === 'locked') return state;
   if (portal === 1) return { ...state, scene: 'TEMPLE_LIGHT', islandEvent: null };
   if (portal === 2) return { ...state, scene: 'ECHO_GARDEN', echo: prepareEchoEntry(state.echo), islandEvent: null };
+  if (portal === 3) return { ...state, scene: 'TEMPLE_BALANCE', islandEvent: null };
   return state;
 }
 export function rotateCrystal(state: GameState, crystal: CrystalId): GameState {
@@ -78,4 +81,24 @@ export function materializeEchoShard(state: GameState): GameState { return state
 export function claimEchoShard(state: GameState): GameState {
   if (state.scene !== 'ECHO_GARDEN' || state.echo.phase !== 'shard-ready' || state.completedPortals.includes(2)) return state;
   return { ...state, echo: { ...state.echo, phase: 'claimed' }, completedPortals: [...state.completedPortals, 2], pendingIslandEvent: 2 };
+}
+export function moveBalanceBlock(state: GameState, block: number, direction: PushDirection): GameState {
+  if (state.scene !== 'TEMPLE_BALANCE') return state;
+  const next = pushBalanceBlock(state.balance, block, direction).next;
+  return next === state.balance ? state : { ...state, balance: next };
+}
+export function resetBalance(state: GameState): GameState {
+  if (state.scene !== 'TEMPLE_BALANCE') return state;
+  const balance = resetBalancePuzzle(state.balance);
+  return balance === state.balance ? state : { ...state, balance };
+}
+export function settleBalance(state: GameState): GameState {
+  return state.scene === 'TEMPLE_BALANCE' ? { ...state, balance: finishBalanceMechanism(state.balance) } : state;
+}
+export function materializeBalanceShard(state: GameState): GameState {
+  return state.scene === 'TEMPLE_BALANCE' ? { ...state, balance: revealBalanceShard(state.balance) } : state;
+}
+export function claimBalanceShard(state: GameState): GameState {
+  if (state.scene !== 'TEMPLE_BALANCE' || state.balance.phase !== 'shard-ready' || state.completedPortals.includes(3)) return state;
+  return { ...state, balance: { ...state.balance, phase: 'claimed' }, completedPortals: [...state.completedPortals, 3], pendingIslandEvent: 3 };
 }

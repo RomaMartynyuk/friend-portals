@@ -1,4 +1,5 @@
 import { testGame } from '@rarefriends/friendsdk/testing';
+import { solveLayout } from './verify-balance.mjs';
 const sliceSeed = 'SLICE_0379';
 async function setRunSeed(page, game) {
   await page.locator('iframe').evaluate((frame, seed) => { frame.src = `./game.html?runSeed=${encodeURIComponent(seed)}`; }, sliceSeed);
@@ -25,7 +26,7 @@ async function position(game) {
   return [Number(await shell.getAttribute('data-player-x')), Number(await shell.getAttribute('data-player-z'))];
 }
 async function moveTo(page, game, x, z, camera = 'echo', tolerance = 0.52) {
-  const angle = camera === 'echo' ? [7, 13] : [10, 18];
+  const angle = camera === 'echo' ? [7, 13] : camera === 'balance' ? [8, 15] : camera === 'temple' ? [7.5, 13] : [10, 18];
   const length = Math.hypot(...angle), right = [angle[1] / length, -angle[0] / length], back = [angle[0] / length, angle[1] / length];
   for (let step = 0; step < 100; step++) {
     const [px, pz] = await position(game), dx = x - px, dz = z - pz;
@@ -35,7 +36,7 @@ async function moveTo(page, game, x, z, camera = 'echo', tolerance = 0.52) {
     if (Math.abs(horizontal) > 0.18) keys.push(horizontal > 0 ? 'd' : 'a');
     if (Math.abs(vertical) > 0.18) keys.push(vertical > 0 ? 's' : 'w');
     if (!keys.length) keys.push(Math.abs(horizontal) > Math.abs(vertical) ? horizontal > 0 ? 'd' : 'a' : vertical > 0 ? 's' : 'w');
-    await move(page, keys, 75);
+    await move(page, keys, camera === 'balance' ? 45 : 75);
   }
   throw new Error(`Could not move to ${x}, ${z}; last position ${await position(game)}`);
 }
@@ -50,6 +51,32 @@ async function playEchoRound(page, game, round) {
     await stepRune(page, game, echoSequences[round][i]);
     if (i < echoSequences[round].length - 1 && !(await echoStatus(game)).includes(`input ${i + 1}`)) throw new Error(`Round ${round + 1} lost step ${i + 1}`);
   }
+}
+async function balanceStatus(game) {
+  const text = (await game.getByTestId('balance-state').textContent()) ?? '';
+  const match = text.match(/layout (\d+); stage (\d+); phase ([^;]+); blocks ([^;]+); A (\d+)\/(\d+); B (\d+)\/(\d+); C (\d+)\/(\d+)/);
+  if (!match) throw new Error(`Could not parse Balance status: ${text}`);
+  return { layout: Number(match[1]), stage: Number(match[2]), phase: match[3], blocks: match[4].split('|').map(pair => pair.split(',').map(Number)), weights: [Number(match[5]), Number(match[7]), Number(match[9])], targets: [Number(match[6]), Number(match[8]), Number(match[10])] };
+}
+async function pushBalance(page, game, block, direction, { mobile = false, rapid = false, settle = true } = {}) {
+  const before = await balanceStatus(game), cell = before.blocks[block];
+  const bx = cell[0] * 1.3, bz = 1.6 + cell[1] * 1.3;
+  await moveTo(page, game, bx - direction.x * 0.7, bz - direction.row * 0.7, 'balance', 0.29);
+  const prompt = game.getByRole('button', { name: new RegExp(`PUSH BLOCK ${String.fromCharCode(65 + block)}`) });
+  if (!mobile) await prompt.waitFor();
+  if (mobile) await game.getByRole('button', { name: 'ACTION' }).click();
+  else if (rapid) { await page.keyboard.press('e'); await page.keyboard.press('e'); }
+  else await prompt.click();
+  const expected = [cell[0] + direction.x, cell[1] + direction.row];
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const current = await balanceStatus(game);
+    if (current.blocks[block][0] === expected[0] && current.blocks[block][1] === expected[1]) {
+      if (settle && current.phase === 'mechanism') await game.getByTestId('balance-state').filter({ hasText: /phase routing/ }).waitFor({ timeout: 10000 });
+      return current;
+    }
+    await page.waitForTimeout(80);
+  }
+  throw new Error(`Block ${block} did not move ${direction.x}, ${direction.row}. Status: ${JSON.stringify(await balanceStatus(game))}`);
 }
 await testGame('.', {
   screenshot: './artifacts/island-complete.png',
@@ -93,7 +120,8 @@ await testGame('.', {
     await game.getByText('PORTAL SHARD I ACQUIRED').waitFor();
     if (!(await game.getByTestId('shard-count').textContent())?.includes('SHARDS 1 / 4')) throw new Error('Shard count did not advance.');
     if (await game.getByRole('button', { name: /CLAIM SHARD/ }).count()) throw new Error('Duplicate shard prompt remained available.');
-    await moveUntil(page, game.getByRole('button', { name: /RETURN TO ISLAND/ }), ['a', 's'], 22);
+    await moveTo(page, game, 0, 5.35, 'temple', 1.25);
+    await game.getByRole('button', { name: /RETURN TO ISLAND/ }).waitFor();
     await game.getByRole('button', { name: /RETURN TO ISLAND/ }).click();
     await game.getByText('THE FLOATING ISLE').waitFor();
     if ((await game.getByTestId('portal-status').textContent()) !== 'Portal 1 complete. Portal 2 active. Portal 3 locked. Portal 4 locked') throw new Error('Portal progression is incorrect.');
@@ -163,6 +191,81 @@ await testGame('.', {
     await game.getByRole('button', { name: /ENTER PORTAL II/ }).click();
     if (!(await echoStatus(game)).includes('claimed; round 3; completed 3')) throw new Error('Completed Echo Garden lost its state.');
     if (await game.getByRole('button', { name: /CLAIM SHARD/ }).count()) throw new Error('Duplicate Shard II claim on re-entry.');
+    await moveTo(page, game, 0, 6.25);
+    await game.getByRole('button', { name: /RETURN TO ISLAND/ }).click();
+    await game.getByText('THE FLOATING ISLE').waitFor();
+    await moveTo(page, game, 0, 6.4, 'island', 1.8);
+    await game.getByRole('button', { name: /ENTER PORTAL III/ }).waitFor();
+    await game.getByRole('button', { name: /ENTER PORTAL III/ }).click();
+    await game.locator('.scene-title').getByText('TEMPLE OF BALANCE').waitFor();
+    if ((await balanceStatus(game)).layout !== 0) throw new Error('Fixed seed did not select Balance layout 0.');
+    await page.screenshot({ path: './artifacts/balance-unsolved.png' });
+    await page.setViewportSize({ width: 360, height: 800 });
+    await game.getByRole('group', { name: 'Movement joystick' }).waitFor({ state: 'visible' });
+    if (!(await game.locator('.balance-readout').isVisible())) throw new Error('Balance readout is hidden at phone width.');
+    const balancePad = await game.getByRole('group', { name: 'Movement joystick' }).boundingBox();
+    if (!balancePad) throw new Error('Balance joystick has no bounds.');
+    const startPosition = await position(game), stickX = balancePad.x + balancePad.width / 2, stickY = balancePad.y + balancePad.height / 2;
+    await page.mouse.move(stickX, stickY); await page.mouse.down(); await page.mouse.move(stickX + 20, stickY, { steps: 3 }); await page.waitForTimeout(250); await page.mouse.up();
+    if (Math.hypot(...(await position(game)).map((value, index) => value - startPosition[index])) < 0.12) throw new Error('Balance joystick did not move the Friend.');
+    await pushBalance(page, game, 0, { x: 0, row: -1 }, { mobile: true });
+    if ((await balanceStatus(game)).weights[0] !== 1) throw new Error('Underweight plate did not register one mark.');
+    await page.screenshot({ path: './artifacts/balance-mobile.png' });
+    await page.setViewportSize({ width: 960, height: 800 });
+    await moveTo(page, game, 0, 7.2, 'balance', 0.3);
+    await game.getByRole('button', { name: /LEAVE TEMPLE/ }).click();
+    await game.getByText('THE FLOATING ISLE').waitFor();
+    await moveTo(page, game, 0, 6.4, 'island', 1.8);
+    await game.getByRole('button', { name: /ENTER PORTAL III/ }).click();
+    if ((await balanceStatus(game)).weights[0] !== 1) throw new Error('Balance state changed on early exit.');
+    await game.getByRole('button', { name: /RESET TEMPLE/ }).click();
+    if ((await balanceStatus(game)).weights[0] !== 0 || (await balanceStatus(game)).layout !== 0) throw new Error('Balance reset changed the seeded layout.');
+    await pushBalance(page, game, 0, { x: -1, row: 0 });
+    const beforeBoundary = await balanceStatus(game);
+    await moveTo(page, game, -3 * 1.3 + 0.7, 1.6 + 2 * 1.3, 'balance', 0.29);
+    await game.getByRole('button', { name: /PUSH BLOCK A/ }).click();
+    if (JSON.stringify((await balanceStatus(game)).blocks) !== JSON.stringify(beforeBoundary.blocks)) throw new Error('Block crossed grid boundary.');
+    for (let i = 0; i < 4; i++) await pushBalance(page, game, 2, { x: -1, row: 0 });
+    await pushBalance(page, game, 2, { x: 0, row: -1 });
+    if ((await balanceStatus(game)).weights[0] !== 3) throw new Error('Overweight plate did not register heavy block.');
+    await page.keyboard.press('r');
+    if ((await balanceStatus(game)).weights[0] !== 0) throw new Error('Keyboard reset did not clear overweight plate.');
+    await pushBalance(page, game, 1, { x: -1, row: 0 }, { rapid: true });
+    if ((await balanceStatus(game)).blocks[1][0] !== -1) throw new Error('Rapid interaction moved a block more than once.');
+    await page.waitForTimeout(150);
+    await pushBalance(page, game, 1, { x: -1, row: 0 });
+    const beforeCollision = await balanceStatus(game);
+    await moveTo(page, game, -2 * 1.3, 1.6 + 3 * 1.3 + 0.7, 'balance', 0.29);
+    await game.getByRole('button', { name: /PUSH BLOCK B/ }).click();
+    if (JSON.stringify((await balanceStatus(game)).blocks) !== JSON.stringify(beforeCollision.blocks)) throw new Error('Blocks overlapped after collision.');
+    await page.keyboard.press('r');
+    const stages = solveLayout(0);
+    for (let index = 0; index < stages[0].path.length; index++) {
+      const move = stages[0].path[index];
+      await pushBalance(page, game, move.block, move.direction, { settle: index !== stages[0].path.length - 1 });
+    }
+    if ((await balanceStatus(game)).phase !== 'mechanism') throw new Error('First mechanism animation did not start.');
+    await page.keyboard.press('r');
+    if ((await balanceStatus(game)).stage !== 0 || (await balanceStatus(game)).phase !== 'routing') throw new Error('Reset during mechanism animation failed.');
+    for (const stage of stages) for (const step of stage.path) await pushBalance(page, game, step.block, step.direction);
+    await game.getByTestId('balance-state').filter({ hasText: /stage 3; phase shard-ready/ }).waitFor({ timeout: 12000 });
+    await page.screenshot({ path: './artifacts/balance-solved.png' });
+    await moveTo(page, game, 0, 0.7, 'balance', 0.45);
+    await moveTo(page, game, 0, -6.1, 'balance', 1.2);
+    await game.getByRole('button', { name: /CLAIM SHARD/ }).click();
+    await game.getByText('PORTAL SHARD III ACQUIRED').waitFor();
+    if (!(await game.getByTestId('shard-count').textContent())?.includes('SHARDS 3 / 4')) throw new Error('Shard III was not counted.');
+    await game.getByRole('button', { name: /CLAIM SHARD/ }).waitFor({ state: 'hidden' });
+    await moveTo(page, game, 0, 7.2, 'balance', 0.3);
+    await game.getByRole('button', { name: /RETURN TO ISLAND/ }).click();
+    await game.getByText('THE FLOATING ISLE').waitFor();
+    if ((await game.getByTestId('portal-status').textContent()) !== 'Portal 1 complete. Portal 2 complete. Portal 3 complete. Portal 4 active') throw new Error('Portal IV did not unlock.');
+    await page.waitForTimeout(3100);
+    await page.screenshot({ path: './artifacts/island-three-shards.png' });
+    await moveTo(page, game, 0, 6.4, 'island', 1.8);
+    await game.getByRole('button', { name: /ENTER PORTAL III/ }).click();
+    if ((await balanceStatus(game)).phase !== 'claimed') throw new Error('Completed Balance Temple lost its restored state.');
+    if (await game.getByRole('button', { name: /CLAIM SHARD/ }).count()) throw new Error('Duplicate Shard III claim on re-entry.');
   },
 });
 await testGame('.', { width: 360, screenshot: './artifacts/mobile.png', check: async ({ page, game }) => {

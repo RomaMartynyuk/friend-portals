@@ -2,13 +2,16 @@ import { Canvas } from '@react-three/fiber';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameComponentProps } from '@rarefriends/friendsdk/runtime';
 import { gameSession } from '../sdk/friendSdkAdapter';
-import { claimShard, claimEchoShard, enterEchoRune, startEchoInput, replayEchoRound, nextEchoRound, materializeEchoShard, enterPortal, finishIslandEvent, gameProgress, portalStatus, resetPuzzle, restoreGameState, returnToIsland, revealShard, rotateCrystal, type GameState } from './GameState';
+import { claimShard, claimEchoShard, claimBalanceShard, enterEchoRune, startEchoInput, replayEchoRound, nextEchoRound, materializeEchoShard, materializeBalanceShard, moveBalanceBlock, resetBalance, settleBalance, enterPortal, finishIslandEvent, gameProgress, portalStatus, resetPuzzle, restoreGameState, returnToIsland, revealShard, rotateCrystal, type GameState } from './GameState';
 import { sessionProgressStore } from './ProgressStore';
 import { crystalPositions, traceLight, type CrystalId } from '../portals/light/LightPuzzleState';
 import { echoRunes, echoTriggerRadius, type RuneId } from '../portals/echo/echoConfig';
 import { submitEchoRune } from '../portals/echo/EchoPuzzleState';
 import { echoPlayback } from '../portals/echo/EchoSequence';
 import { EchoGarden } from '../portals/echo/EchoGarden';
+import { balanceWalkable, plateWeights, pushBalanceBlock, type PushDirection } from '../portals/balance/BalancePuzzleState';
+import { balanceLayouts, gridToWorld } from '../portals/balance/balanceLayouts';
+import { BalanceTemple } from '../portals/balance/BalanceTemple';
 import { useMovementInput } from '../input/useMovementInput';
 import { AudioManager } from '../audio/AudioManager';
 import { Island } from '../world/Island';
@@ -19,7 +22,7 @@ import { HUD } from '../ui/HUD';
 import { MobileControls } from '../ui/MobileControls';
 import '../../style.css';
 
-type Nearby = Readonly<{ type: 'portal' | 'crystal' | 'shard' | 'echo-shard' | 'exit' | 'unavailable'; id: number; label: string; actionable: boolean }>;
+type Nearby = Readonly<{ type: 'portal' | 'crystal' | 'shard' | 'echo-shard' | 'balance-shard' | 'balance-block' | 'exit' | 'unavailable'; id: number; label: string; actionable: boolean }>;
 const sameNearby = (a: Nearby | null, b: Nearby | null) => a?.type === b?.type && a?.id === b?.id && a?.label === b?.label;
 export default function Game(props: GameComponentProps) {
   const session = gameSession(props);
@@ -46,11 +49,20 @@ export default function Game(props: GameComponentProps) {
   const [echoPulseAll, setEchoPulseAll] = useState(false);
   const [echoCallout, setEchoCallout] = useState<string | null>(null);
   const [echoClaiming, setEchoClaiming] = useState(false);
+  const [balanceResetVersion, setBalanceResetVersion] = useState(0);
+  const [balanceChargeStep, setBalanceChargeStep] = useState(0);
+  const [balanceClaiming, setBalanceClaiming] = useState(false);
+  const [balanceResistedBlock, setBalanceResistedBlock] = useState<number | null>(null);
+  const [balanceCallout, setBalanceCallout] = useState<string | null>(null);
   const introSeen = useRef(false);
   const echoIntroSeen = useRef(false);
+  const balanceIntroSeen = useRef(false);
   const echoOccupiedRune = useRef<RuneId | null>(null);
   const echoStateRef = useRef(state.echo); echoStateRef.current = state.echo;
   const echoClaimingLock = useRef(false);
+  const balanceClaimingLock = useRef(false);
+  const balancePushLock = useRef(false);
+  const balancePushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const echoEffectTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const rotating = useRef(false);
   const claimingLock = useRef(false);
@@ -72,18 +84,26 @@ export default function Game(props: GameComponentProps) {
     transitionLock.current = true;
     if (rotationTimer.current) clearTimeout(rotationTimer.current);
     if (claimTimer.current) clearTimeout(claimTimer.current);
-    rotating.current = false; claimingLock.current = false; echoClaimingLock.current = false;
+    if (balancePushTimer.current) clearTimeout(balancePushTimer.current);
+    rotating.current = false; claimingLock.current = false; echoClaimingLock.current = false; balanceClaimingLock.current = false; balancePushLock.current = false;
     stopEchoEffects(); setEchoClaiming(false); echoOccupiedRune.current = null;
+    audio.stopBalance(); setBalanceClaiming(false); setBalanceResistedBlock(null); setBalanceCallout(null);
     setBeamBroken(false); setClaiming(false);
     updateState(returnToIsland);
     setTimeout(() => { transitionLock.current = false; }, 350);
-  }, [updateState, stopEchoEffects]);
+  }, [updateState, stopEchoEffects, audio]);
   const reset = useCallback(() => {
-    if (state.scene !== 'TEMPLE_LIGHT' || state.light.phase !== 'routing' || props.paused) return;
-    if (rotationTimer.current) clearTimeout(rotationTimer.current);
-    rotating.current = false; setBeamBroken(false); setResetVersion(value => value + 1);
-    updateState(resetPuzzle); audio.play('interaction');
-  }, [state.scene, state.light.phase, props.paused, updateState, audio]);
+    if (props.paused) return;
+    if (state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing') {
+      if (rotationTimer.current) clearTimeout(rotationTimer.current);
+      rotating.current = false; setBeamBroken(false); setResetVersion(value => value + 1);
+      updateState(resetPuzzle); audio.play('interaction');
+    } else if (state.scene === 'TEMPLE_BALANCE' && state.balance.phase !== 'claimed' && state.balance.phase !== 'shard-ready') {
+      if (balancePushTimer.current) clearTimeout(balancePushTimer.current);
+      balancePushLock.current = false; setBalanceResistedBlock(null); setBalanceChargeStep(0); setBalanceCallout(null);
+      audio.stopBalance(); audio.play('balance-slide'); setBalanceResetVersion(value => value + 1); updateState(resetBalance);
+    }
+  }, [state.scene, state.light.phase, state.balance.phase, props.paused, updateState, audio]);
   const interact = useCallback(() => {
     const near = nearRef.current;
     if (!near?.actionable || props.paused || status !== 'ready' || transitionLock.current) return;
@@ -97,6 +117,34 @@ export default function Game(props: GameComponentProps) {
       rotating.current = true; setBeamBroken(true); audio.play('crystal-rotate');
       updateState(previous => rotateCrystal(previous, near.id as CrystalId));
       rotationTimer.current = setTimeout(() => { rotating.current = false; setBeamBroken(false); audio.play('beam-connect'); }, reducedMotion ? 100 : 310);
+    } else if (near.type === 'balance-block') {
+      if (balancePushLock.current || state.balance.phase !== 'routing') return;
+      const block = state.balance.blocks[near.id], [blockX, blockZ] = gridToWorld(block), [playerX, playerZ] = playerPosition.current;
+      if (Math.hypot(blockX - playerX, blockZ - playerZ) >= 1.62) return;
+      const dx = blockX - playerX, dz = blockZ - playerZ;
+      const direction: PushDirection = Math.abs(dx) > Math.abs(dz)
+        ? { x: dx >= 0 ? 1 : -1, row: 0 } : { x: 0, row: dz >= 0 ? 1 : -1 };
+      const outcome = pushBalanceBlock(state.balance, near.id, direction);
+      if (outcome.result !== 'moved') {
+        setBalanceResistedBlock(near.id); audio.play('balance-blocked');
+        if (balancePushTimer.current) clearTimeout(balancePushTimer.current);
+        balancePushTimer.current = setTimeout(() => setBalanceResistedBlock(null), 260);
+        return;
+      }
+      balancePushLock.current = true; setBalanceResistedBlock(null);
+      updateState(previous => moveBalanceBlock(previous, near.id, direction)); audio.play('balance-slide');
+      const weights = plateWeights(outcome.next), targets = balanceLayouts[outcome.next.layout].targets;
+      if (Object.keys(weights).some(plate => weights[plate as keyof typeof weights] > targets[plate as keyof typeof targets])) audio.play('balance-over');
+      else if (outcome.balanced.length) audio.play('balance-plate');
+      else audio.play('balance-under');
+      balancePushTimer.current = setTimeout(() => { balancePushLock.current = false; }, reducedMotion ? 110 : 310);
+    } else if (near.type === 'balance-shard') {
+      if (balanceClaimingLock.current || state.balance.phase !== 'shard-ready') return;
+      balanceClaimingLock.current = true; setBalanceClaiming(true); audio.play('balance-shard-claim');
+      claimTimer.current = setTimeout(() => {
+        updateState(claimBalanceShard); nearRef.current = null; setNearby(null); setBalanceClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD III ACQUIRED');
+        setTimeout(() => setBanner(null), 2100);
+      }, reducedMotion ? 120 : 700);
     } else if (near.type === 'echo-shard') {
       if (echoClaimingLock.current || state.echo.phase !== 'shard-ready') return;
       echoClaimingLock.current = true; setEchoClaiming(true); audio.play('echo-shard-claim');
@@ -112,7 +160,7 @@ export default function Game(props: GameComponentProps) {
         setTimeout(() => setBanner(null), 2100);
       }, reducedMotion ? 120 : 700);
     }
-  }, [props.paused, status, state.light.phase, state.echo.phase, reducedMotion, audio, updateState, exitRoom]);
+  }, [props.paused, status, state.light.phase, state.echo.phase, state.balance, reducedMotion, audio, updateState, exitRoom]);
   const input = useMovementInput(props.paused || status !== 'ready', interact);
   useEffect(() => { let active = true; setStatus('loading'); void props.client.read().then(snapshot => {
     if (!active) return;
@@ -121,11 +169,14 @@ export default function Game(props: GameComponentProps) {
     setStatus('ready');
   }).catch(cause => { if (active) { setError(cause instanceof Error ? cause.message : 'Unable to open the game.'); setStatus('error'); } });
   return () => { active = false; }; }, [props.client, props.friendId]);
-  useEffect(() => () => { audio.dispose(); if (rotationTimer.current) clearTimeout(rotationTimer.current); if (claimTimer.current) clearTimeout(claimTimer.current); for (const timer of echoEffectTimers.current) clearTimeout(timer); }, [audio]);
+  useEffect(() => () => { audio.dispose(); if (rotationTimer.current) clearTimeout(rotationTimer.current); if (claimTimer.current) clearTimeout(claimTimer.current); if (balancePushTimer.current) clearTimeout(balancePushTimer.current); for (const timer of echoEffectTimers.current) clearTimeout(timer); }, [audio]);
   useEffect(() => { const media = window.matchMedia('(prefers-reduced-motion: reduce)'); const update = () => setReducedMotion(media.matches); media.addEventListener('change', update); return () => media.removeEventListener('change', update); }, []);
   useEffect(() => {
     nearRef.current = null; setNearby(null); input.setTouch({ x: 0, z: 0 });
     echoOccupiedRune.current = null;
+    if (state.scene === 'TEMPLE_BALANCE' && !balanceIntroSeen.current) {
+      balanceIntroSeen.current = true; setIntro(true); const timer = setTimeout(() => setIntro(false), 2600); return () => clearTimeout(timer);
+    }
     if (state.scene === 'ECHO_GARDEN' && !echoIntroSeen.current) {
       echoIntroSeen.current = true; setIntro(true); const timer = setTimeout(() => setIntro(false), 2600); return () => clearTimeout(timer);
     }
@@ -185,6 +236,24 @@ export default function Game(props: GameComponentProps) {
     timers.push(setTimeout(() => { setEchoPulseAll(false); audio.play('echo-shard-materialize'); updateState(materializeEchoShard); setEchoCallout(null); }, 2450));
     return () => { timers.forEach(clearTimeout); audio.stopEcho(); };
   }, [state.scene, state.echo.phase, props.paused, updateState, audio]);
+  useEffect(() => {
+    if (state.scene !== 'TEMPLE_BALANCE' || state.balance.phase !== 'mechanism' || props.paused) return;
+    setBalanceCallout(state.balance.stage === 1 ? 'FIRST COUNTERWEIGHT RAISED' : 'GATE RELEASED');
+    audio.play('balance-chain');
+    const timer = setTimeout(() => { setBalanceCallout(null); updateState(settleBalance); }, reducedMotion ? 400 : 1050);
+    return () => clearTimeout(timer);
+  }, [state.scene, state.balance.phase, state.balance.stage, props.paused, reducedMotion, audio, updateState]);
+  useEffect(() => {
+    if (state.scene !== 'TEMPLE_BALANCE' || state.balance.phase !== 'finale' || props.paused) return;
+    setBalanceCallout('THE TEMPLE IS BALANCED'); setBalanceChargeStep(0); audio.play('balance-complete');
+    const timers = [
+      setTimeout(() => { setBalanceChargeStep(1); audio.play('balance-chain'); }, 380),
+      setTimeout(() => { setBalanceChargeStep(2); audio.play('balance-plate'); }, 850),
+      setTimeout(() => { setBalanceChargeStep(3); audio.play('balance-bridge'); }, 1410),
+      setTimeout(() => { setBalanceChargeStep(4); audio.play('balance-shard-materialize'); updateState(materializeBalanceShard); setBalanceCallout(null); }, reducedMotion ? 900 : 2700),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, [state.scene, state.balance.phase, props.paused, reducedMotion, audio, updateState]);
   const seals = traceLight(state.light).seals;
   const previousSeals = useRef(seals);
   useEffect(() => {
@@ -198,7 +267,7 @@ export default function Game(props: GameComponentProps) {
     const interval = setInterval(() => {
       const value = Math.min(1, (performance.now() - start) / (reducedMotion ? 500 : 2800));
       setUnlockProgress(value);
-      if (!activated && value > 0.76) { activated = true; audio.play(state.islandEvent === 2 ? 'echo-portal-unlock' : 'portal-unlock'); }
+      if (!activated && value > 0.76) { activated = true; audio.play(state.islandEvent === 3 ? 'balance-portal-unlock' : state.islandEvent === 2 ? 'echo-portal-unlock' : 'portal-unlock'); }
       if (value >= 1) { clearInterval(interval); updateState(finishIslandEvent); }
     }, 35);
     return () => clearInterval(interval);
@@ -227,7 +296,7 @@ export default function Game(props: GameComponentProps) {
         const p = portalConfig[i];
         if (Math.hypot(x - p.x, z - p.z) < 2.25) {
           const status = portalStatus(state, i + 1);
-          next = i < 2 && status !== 'locked' ? { type: 'portal', id: i + 1, label: `ENTER PORTAL ${i === 0 ? 'I' : 'II'}`, actionable: true }
+          next = i < 3 && status !== 'locked' ? { type: 'portal', id: i + 1, label: `ENTER PORTAL ${['I', 'II', 'III'][i]}`, actionable: true }
             : { type: 'unavailable', id: i + 1, label: status === 'active' ? `${p.name} · PHASE ${i + 2}` : 'PORTAL LOCKED', actionable: false };
           break;
         }
@@ -239,24 +308,32 @@ export default function Game(props: GameComponentProps) {
         crystalPositions.forEach((p, i) => { const distance = Math.hypot(x - p[0], z - p[2]); if (distance < best) { best = distance; next = { type: 'crystal', id: i, label: `ROTATE CRYSTAL ${'ABC'[i]}`, actionable: true }; } });
       }
       if (!next && Math.hypot(x, z - 5.35) < 1.7) next = { type: 'exit', id: 0, label: state.light.phase === 'claimed' ? 'RETURN TO ISLAND' : 'LEAVE TEMPLE', actionable: true };
-    } else {
+    } else if (state.scene === 'ECHO_GARDEN') {
       const rune = echoRunes.findIndex(entry => Math.hypot(x - entry.x, z - entry.z) < echoTriggerRadius);
       const occupied = rune < 0 ? null : rune as RuneId;
       if (occupied !== echoOccupiedRune.current) { echoOccupiedRune.current = occupied; if (occupied !== null) onEchoRuneEntry(occupied); }
       if (state.echo.phase === 'shard-ready' && Math.hypot(x, z) < 1.7) next = { type: 'echo-shard', id: 2, label: 'CLAIM SHARD', actionable: true };
       if (!next && Math.hypot(x, z - 6.25) < 1.65) next = { type: 'exit', id: 0, label: state.echo.phase === 'claimed' ? 'RETURN TO ISLAND' : 'LEAVE GARDEN', actionable: true };
+    } else {
+      if (state.balance.phase === 'shard-ready' && Math.hypot(x, z + 6.1) < 1.75) next = { type: 'balance-shard', id: 3, label: 'CLAIM SHARD', actionable: true };
+      if (!next && Math.abs(x) < 1.4 && z > 6.65 && z < 8.2) next = { type: 'exit', id: 0, label: state.balance.phase === 'claimed' ? 'RETURN TO ISLAND' : 'LEAVE TEMPLE', actionable: true };
+      if (!next && state.balance.phase === 'routing') {
+        let best = 1.62;
+        state.balance.blocks.forEach((cell, id) => { const [bx, bz] = gridToWorld(cell), distance = Math.hypot(x - bx, z - bz); if (distance < best) { best = distance; next = { type: 'balance-block', id, label: `PUSH BLOCK ${String.fromCharCode(65 + id)} · WEIGHT ${'I'.repeat(balanceLayouts[state.balance.layout].blocks[id].weight)}`, actionable: true }; } });
+      }
     }
     if (!sameNearby(nearRef.current, next)) { nearRef.current = next; setNearby(next); }
-  }, [state.scene, state.light.phase, state.echo.phase, state.completedPortals, onEchoRuneEntry]);
+  }, [state.scene, state.light.phase, state.echo.phase, state.balance, state.completedPortals, onEchoRuneEntry]);
   if (status !== 'ready') return <div className="startup" role={status === 'error' ? 'alert' : 'status'}><strong>FRIEND PORTALS</strong><p>{status === 'error' ? error : 'Opening the island…'}</p>{status === 'error' && <button onClick={() => { setStatus('loading'); void props.client.read().then(() => setStatus('ready')).catch(cause => { setError(String(cause)); setStatus('error'); }); }}>RETRY</button>}</div>;
   return <main ref={gameShell} className="game-shell" aria-label="Friend Portals game" data-run-seed={state.runSeed}>
-    <Canvas key={state.scene} shadows dpr={[1, 1.5]} camera={{ fov: 42, near: 0.1, far: 90, position: state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : [7, 11, 13] }} gl={{ antialias: true, powerPreference: 'high-performance' }}>
+    <Canvas shadows dpr={[1, 1.5]} camera={{ fov: 42, near: 0.1, far: 90, position: [10, 14, 18] }} gl={{ antialias: true, powerPreference: 'high-performance' }}>
       {state.scene === 'ISLAND' ? <Island state={state} identitySeed={Number(props.friendId % 1000n)} reducedMotion={reducedMotion} unlockProgress={unlockProgress} />
         : state.scene === 'TEMPLE_LIGHT' ? <LightTemple light={state.light} highlightedCrystal={nearby?.type === 'crystal' ? nearby.id : null} resetVersion={resetVersion} beamBroken={beamBroken} chargeStep={chargeStep} claiming={claiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
-        : <EchoGarden echo={state.echo} activeRune={echoActiveRune} wrongRune={echoWrongRune} pulseAll={echoPulseAll} claiming={echoClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />}
-      <Player cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : [7, 11, 13]} reducedMotion={reducedMotion} identity={session.identity} vector={input.vector} onPosition={reportPosition} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : 7.7} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : [0, 3.9]} />
+        : state.scene === 'ECHO_GARDEN' ? <EchoGarden echo={state.echo} activeRune={echoActiveRune} wrongRune={echoWrongRune} pulseAll={echoPulseAll} claiming={echoClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
+          : <BalanceTemple balance={state.balance} nearbyBlock={nearby?.type === 'balance-block' ? nearby.id : null} resistedBlock={balanceResistedBlock} resetVersion={balanceResetVersion} chargeStep={balanceChargeStep} claiming={balanceClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />}
+      <Player key={state.scene} cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : state.scene === 'ECHO_GARDEN' ? [7, 11, 13] : [8, 11, 15]} reducedMotion={reducedMotion} identity={session.identity} vector={input.vector} onPosition={reportPosition} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : state.scene === 'ECHO_GARDEN' ? 7.7 : 8.8} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : state.scene === 'ECHO_GARDEN' ? [0, 3.9] : [0, 6.35]} canMove={state.scene === 'TEMPLE_BALANCE' ? (x, z) => balanceWalkable(state.balance, x, z) : undefined} />
     </Canvas>
-    <HUD friend={session.identity.label} scene={state.scene} nearby={nearby?.label ?? null} onInteract={interact} muted={muted} onToggleMute={() => { const next = !muted; setMuted(next); audio.setMuted(next); }} shards={state.completedPortals.length} seals={seals} canReset={state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing'} onReset={reset} intro={intro} banner={banner} portalStatuses={[1, 2, 3, 4].map(portal => portalStatus(state, portal))} echo={state.echo} echoCallout={echoCallout} />
+    <HUD friend={session.identity.label} scene={state.scene} nearby={nearby?.label ?? null} onInteract={interact} muted={muted} onToggleMute={() => { const next = !muted; setMuted(next); audio.setMuted(next); }} shards={state.completedPortals.length} seals={seals} canReset={state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing' || state.scene === 'TEMPLE_BALANCE' && state.balance.phase !== 'claimed' && state.balance.phase !== 'shard-ready'} onReset={reset} intro={intro} banner={banner} portalStatuses={[1, 2, 3, 4].map(portal => portalStatus(state, portal))} echo={state.echo} echoCallout={echoCallout} balance={state.balance} balanceCallout={balanceCallout} />
     <MobileControls onMove={input.setTouch} onInteract={interact} canInteract={Boolean(nearby?.actionable)} paused={props.paused} />
     {flash && <div className="shard-flash" aria-hidden="true" />}
     <div className="portrait-hint">Rotate your device to landscape for the best view.</div>
