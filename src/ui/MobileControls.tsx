@@ -16,7 +16,7 @@ export function MobileControls({ onMove, onInteract, canInteract, paused }: {
     <div ref={pad} className="joystick" role="group" aria-label="Movement joystick"
       onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); move(event.clientX, event.clientY); }}
       onPointerMove={event => { if (event.buttons) move(event.clientX, event.clientY); }} onPointerUp={stop} onPointerCancel={stop}>
-      <span className="joystick-knob" style={{ transform: `translate(${knob.x * 29}px, ${knob.z * 29}px)` }} />
+      <span className="joystick-knob" style={{ transform: `translate(${knob.x * 21}px, ${knob.z * 21}px)` }} />
     </div>
     <button className="touch-action" disabled={!canInteract || paused} onClick={onInteract}>ACTION</button>
   </div>;
