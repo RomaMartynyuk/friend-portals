@@ -1,0 +1,6 @@
+{
+  "name": "Friend Portals",
+  "consumable": "Unused SDK schema item",
+  "price": "1000000000000000000",
+  "outcomes": [{ "name": "Unused SDK schema outcome", "chanceBps": 10000, "reward": "1000000000000000000" }]
+}
