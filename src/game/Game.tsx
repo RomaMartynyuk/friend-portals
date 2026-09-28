@@ -23,8 +23,9 @@ type Nearby = Readonly<{ type: 'portal' | 'crystal' | 'shard' | 'echo-shard' | '
 const sameNearby = (a: Nearby | null, b: Nearby | null) => a?.type === b?.type && a?.id === b?.id && a?.label === b?.label;
 export default function Game(props: GameComponentProps) {
   const session = gameSession(props);
+  const fixedRunSeed = new URLSearchParams(window.location.search).get('runSeed') || undefined;
   const gameShell = useRef<HTMLElement>(null);
-  const [state, setState] = useState<GameState>(() => restoreGameState(sessionProgressStore.read(props.friendId)));
+  const [state, setState] = useState<GameState>(() => restoreGameState(sessionProgressStore.read(props.friendId, fixedRunSeed)));
   const [nearby, setNearby] = useState<Nearby | null>(null);
   const nearRef = useRef<Nearby | null>(null);
   const playerPosition = useRef<[number, number]>([0, 2.5]);
@@ -100,14 +101,14 @@ export default function Game(props: GameComponentProps) {
       if (echoClaimingLock.current || state.echo.phase !== 'shard-ready') return;
       echoClaimingLock.current = true; setEchoClaiming(true); audio.play('echo-shard-claim');
       claimTimer.current = setTimeout(() => {
-        updateState(claimEchoShard); setEchoClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD II ACQUIRED');
+        updateState(claimEchoShard); nearRef.current = null; setNearby(null); setEchoClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD II ACQUIRED');
         setTimeout(() => setBanner(null), 2100);
       }, reducedMotion ? 120 : 700);
     } else if (near.type === 'shard') {
       if (claimingLock.current || state.light.phase !== 'shard-ready') return;
       claimingLock.current = true; setClaiming(true); audio.play('shard-claim');
       claimTimer.current = setTimeout(() => {
-        updateState(claimShard); setClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD I ACQUIRED');
+        updateState(claimShard); nearRef.current = null; setNearby(null); setClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD I ACQUIRED');
         setTimeout(() => setBanner(null), 2100);
       }, reducedMotion ? 120 : 700);
     }
@@ -116,7 +117,7 @@ export default function Game(props: GameComponentProps) {
   useEffect(() => { let active = true; setStatus('loading'); void props.client.read().then(snapshot => {
     if (!active) return;
     if (snapshot.friendId !== props.friendId) throw new Error('Selected Friend changed. Please re-enter the game.');
-    setState(restoreGameState(sessionProgressStore.read(props.friendId)));
+    setState(restoreGameState(sessionProgressStore.read(props.friendId, fixedRunSeed)));
     setStatus('ready');
   }).catch(cause => { if (active) { setError(cause instanceof Error ? cause.message : 'Unable to open the game.'); setStatus('error'); } });
   return () => { active = false; }; }, [props.client, props.friendId]);
@@ -142,7 +143,7 @@ export default function Game(props: GameComponentProps) {
   }, [state.scene, state.light.phase, props.paused, updateState, audio]);
   useEffect(() => {
     if (state.scene !== 'ECHO_GARDEN' || state.echo.phase !== 'playback' || props.paused || intro) return;
-    const timeline = echoPlayback(state.echo.round);
+    const timeline = echoPlayback(state.echo);
     const timers: ReturnType<typeof setTimeout>[] = [];
     const later = (work: () => void, delay: number) => { timers.push(setTimeout(work, delay)); };
     setEchoCallout(null);
@@ -184,7 +185,7 @@ export default function Game(props: GameComponentProps) {
     timers.push(setTimeout(() => { setEchoPulseAll(false); audio.play('echo-shard-materialize'); updateState(materializeEchoShard); setEchoCallout(null); }, 2450));
     return () => { timers.forEach(clearTimeout); audio.stopEcho(); };
   }, [state.scene, state.echo.phase, props.paused, updateState, audio]);
-  const seals = traceLight(state.light.orientations).seals;
+  const seals = traceLight(state.light).seals;
   const previousSeals = useRef(seals);
   useEffect(() => {
     if (state.scene === 'TEMPLE_LIGHT' && seals > previousSeals.current && state.light.phase === 'routing') audio.play('seal-activate');
@@ -248,7 +249,7 @@ export default function Game(props: GameComponentProps) {
     if (!sameNearby(nearRef.current, next)) { nearRef.current = next; setNearby(next); }
   }, [state.scene, state.light.phase, state.echo.phase, state.completedPortals, onEchoRuneEntry]);
   if (status !== 'ready') return <div className="startup" role={status === 'error' ? 'alert' : 'status'}><strong>FRIEND PORTALS</strong><p>{status === 'error' ? error : 'Opening the island…'}</p>{status === 'error' && <button onClick={() => { setStatus('loading'); void props.client.read().then(() => setStatus('ready')).catch(cause => { setError(String(cause)); setStatus('error'); }); }}>RETRY</button>}</div>;
-  return <main ref={gameShell} className="game-shell" aria-label="Friend Portals game">
+  return <main ref={gameShell} className="game-shell" aria-label="Friend Portals game" data-run-seed={state.runSeed}>
     <Canvas key={state.scene} shadows dpr={[1, 1.5]} camera={{ fov: 42, near: 0.1, far: 90, position: state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : [7, 11, 13] }} gl={{ antialias: true, powerPreference: 'high-performance' }}>
       {state.scene === 'ISLAND' ? <Island state={state} identitySeed={Number(props.friendId % 1000n)} reducedMotion={reducedMotion} unlockProgress={unlockProgress} />
         : state.scene === 'TEMPLE_LIGHT' ? <LightTemple light={state.light} highlightedCrystal={nearby?.type === 'crystal' ? nearby.id : null} resetVersion={resetVersion} beamBroken={beamBroken} chargeStep={chargeStep} claiming={claiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />

@@ -7,6 +7,7 @@
     "dev": "friendsdk dev .",
     "build": "friendsdk build .",
     "check": "friendsdk check .",
+    "test:seed": "node scripts/verify-seed.mjs",
     "typecheck": "tsc --noEmit",
     "test:browser": "friendsdk test . --screenshot ./artifacts/vertical-slice.png",
     "test:slice": "node scripts/verify-slice.mjs"

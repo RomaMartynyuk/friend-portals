@@ -1,4 +1,9 @@
 import { testGame } from '@rarefriends/friendsdk/testing';
+const sliceSeed = 'SLICE_0379';
+async function setRunSeed(page, game) {
+  await page.locator('iframe').evaluate((frame, seed) => { frame.src = `./game.html?runSeed=${encodeURIComponent(seed)}`; }, sliceSeed);
+  await game.locator(`main.game-shell[data-run-seed="${sliceSeed}"]`).waitFor();
+}
 const echoRunes = [[0, -3.65], [3.1, -1.25], [2.55, 2.6], [-2.55, 2.6], [-3.1, -1.25]];
 const echoSequences = [[0, 3, 1], [4, 1, 3, 0], [2, 4, 0, 3, 1]];
 async function move(page, keys, milliseconds) {
@@ -49,6 +54,7 @@ async function playEchoRound(page, game, round) {
 await testGame('.', {
   screenshot: './artifacts/island-complete.png',
   check: async ({ page, game }) => {
+    await setRunSeed(page, game);
     await game.getByText('THE FLOATING ISLE').waitFor();
     await game.locator('canvas').click({ position: { x: 300, y: 250 } });
     await moveUntil(page, game.getByRole('button', { name: /ENTER PORTAL I/ }), ['w'], 7);
@@ -146,7 +152,7 @@ await testGame('.', {
     await game.getByText('PORTAL SHARD II ACQUIRED').waitFor();
     await page.setViewportSize({ width: 960, height: 800 });
     if (!(await game.getByTestId('shard-count').textContent())?.includes('SHARDS 2 / 4')) throw new Error('Shard II not counted.');
-    if (await game.getByRole('button', { name: /CLAIM SHARD/ }).count()) throw new Error('Duplicate Shard II claim prompt remained.');
+    await game.getByRole('button', { name: /CLAIM SHARD/ }).waitFor({ state: 'hidden' });
     await moveTo(page, game, 0, 6.25);
     await game.getByRole('button', { name: /RETURN TO ISLAND/ }).click();
     await game.getByText('THE FLOATING ISLE').waitFor();
@@ -160,6 +166,7 @@ await testGame('.', {
   },
 });
 await testGame('.', { width: 360, screenshot: './artifacts/mobile.png', check: async ({ page, game }) => {
+  await setRunSeed(page, game);
   await game.getByRole('group', { name: 'Movement joystick' }).waitFor();
   await game.locator('canvas').click({ position: { x: 150, y: 70 } });
   for (let i = 0; i < 7; i++) { if ((await promptText(game))?.includes('ENTER PORTAL I')) break; await move(page, ['w'], 130); }

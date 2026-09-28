@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Quaternion, Vector3, type Group } from 'three';
-import { traceLight, type BeamSegment } from './LightPuzzleState';
+import { traceLight, type BeamSegment, type LightPuzzleState } from './LightPuzzleState';
 function BeamLink({ segment, index, charged, reducedMotion }: { segment: BeamSegment; index: number; charged: boolean; reducedMotion: boolean }) {
   const particle = useRef<Group>(null);
   const shape = useMemo(() => {
@@ -23,10 +23,10 @@ function BeamLink({ segment, index, charged, reducedMotion }: { segment: BeamSeg
     <mesh position={shape.to}><sphereGeometry args={[segment.terminal ? 0.09 : 0.16, 8, 6]} /><meshBasicMaterial color={segment.terminal ? '#bcad83' : '#ffe7a0'} transparent opacity={segment.terminal ? 0.38 : 0.55} depthWrite={false} /></mesh>
   </>;
 }
-export function LightBeamSystem({ orientations, broken, charged, reducedMotion }: {
-  orientations: readonly [number, number, number]; broken: boolean; charged: boolean; reducedMotion: boolean;
+export function LightBeamSystem({ light, broken, charged, reducedMotion }: {
+  light: LightPuzzleState; broken: boolean; charged: boolean; reducedMotion: boolean;
 }) {
-  const trace = useMemo(() => traceLight(orientations), [orientations]);
+  const trace = useMemo(() => traceLight(light), [light]);
   if (broken) return null;
   return <group>{trace.segments.map((segment, index) => <BeamLink key={`${index}-${segment.to.join(',')}`} segment={segment} index={index} charged={charged} reducedMotion={reducedMotion} />)}</group>;
 }

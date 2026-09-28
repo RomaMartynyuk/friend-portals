@@ -1,9 +1,8 @@
 import type { SceneId } from '../game/GameState';
 import type { EchoPuzzleState } from '../portals/echo/EchoPuzzleState';
-import { echoSequences } from '../portals/echo/echoConfig';
 function echoLabel(echo: EchoPuzzleState) {
   const round = Math.min(echo.round + 1, 3);
-  if (echo.phase === 'input') return `ROUND ${round} · ECHO  ${echo.inputIndex} / ${echoSequences[echo.round].length}`;
+  if (echo.phase === 'input') return `ROUND ${round} · ECHO  ${echo.inputIndex} / ${echo.sequences[echo.round].length}`;
   if (echo.phase === 'playback') return `ROUND ${round} · LISTEN`;
   if (echo.phase === 'retry') return `ROUND ${round} · LISTEN AGAIN`;
   if (echo.phase === 'round-complete') return `ECHO ${['I', 'II', 'III'][echo.completedRounds - 1]} RESTORED`;

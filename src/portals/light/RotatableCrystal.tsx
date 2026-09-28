@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { MathUtils, type Group } from 'three';
 import { crystalPositions, type CrystalId } from './LightPuzzleState';
@@ -7,12 +7,13 @@ export function RotatableCrystal({ id, orientation, resetVersion, highlighted, l
 }) {
   const position = crystalPositions[id];
   const rotor = useRef<Group>(null);
-  const target = useRef(0);
+  const target = useRef(orientation * Math.PI / 2);
   const previous = useRef(orientation);
   const previousReset = useRef(resetVersion);
+  useLayoutEffect(() => { if (rotor.current) rotor.current.rotation.y = target.current; }, []);
   useEffect(() => {
     if (resetVersion !== previousReset.current) {
-      target.current = 0; previousReset.current = resetVersion;
+      target.current = orientation * Math.PI / 2; previousReset.current = resetVersion;
     } else if (orientation !== previous.current) target.current += Math.PI / 2;
     previous.current = orientation;
   }, [orientation, resetVersion]);

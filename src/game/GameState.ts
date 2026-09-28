@@ -2,9 +2,12 @@ import { initialLightPuzzle, resetLightCrystals, rotateLightCrystal, type Crysta
 import type { GameProgress } from './ProgressStore';
 import { initialEchoPuzzle, prepareEchoEntry, pauseEchoForExit, allowEchoInput, submitEchoRune, restartEchoRound, beginNextEchoRound, revealEchoShard, type EchoPuzzleState } from '../portals/echo/EchoPuzzleState';
 import type { RuneId } from '../portals/echo/echoConfig';
+import { createRunSeed, type RunSeed } from './seededRun';
+import { lightVariantForSeed } from '../portals/light/LightPuzzleState';
 export type SceneId = 'ISLAND' | 'TEMPLE_LIGHT' | 'ECHO_GARDEN';
 export type PortalStatus = 'active' | 'locked' | 'complete';
 export type GameState = Readonly<{
+  runSeed: RunSeed;
   scene: SceneId;
   completedPortals: readonly number[];
   light: LightPuzzleState;
@@ -12,11 +15,22 @@ export type GameState = Readonly<{
   pendingIslandEvent: number | null;
   islandEvent: number | null;
 }>;
-export const initialGameState: GameState = { scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle, echo: initialEchoPuzzle, pendingIslandEvent: null, islandEvent: null };
-export function restoreGameState(progress: GameProgress): GameState {
-  return { ...initialGameState, completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo };
+export function createInitialGameState(runSeed: RunSeed): GameState {
+  return { runSeed, scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), pendingIslandEvent: null, islandEvent: null };
 }
-export function gameProgress(state: GameState): GameProgress { return { completedPortals: state.completedPortals, light: state.light, echo: state.echo }; }
+export function restoreGameState(progress: GameProgress): GameState {
+  return { ...createInitialGameState(progress.runSeed), completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo };
+}
+export function gameProgress(state: GameState): GameProgress { return { runSeed: state.runSeed, completedPortals: state.completedPortals, light: state.light, echo: state.echo }; }
+/** A normal new journey guarantees an immediately different light configuration. */
+export function startNewJourney(previous: GameState, fixedSeed?: RunSeed): GameState {
+  if (fixedSeed !== undefined) return createInitialGameState(fixedSeed);
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const runSeed = createRunSeed();
+    if (runSeed !== previous.runSeed && lightVariantForSeed(runSeed) !== lightVariantForSeed(previous.runSeed)) return createInitialGameState(runSeed);
+  }
+  throw new Error('Unable to create a distinct journey seed.');
+}
 export function portalStatus(state: GameState, portal: number): PortalStatus {
   if (state.completedPortals.includes(portal)) return 'complete';
   return portal === state.completedPortals.length + 1 ? 'active' : 'locked';

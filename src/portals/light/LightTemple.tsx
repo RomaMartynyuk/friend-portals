@@ -30,7 +30,7 @@ export function LightTemple({ light, highlightedCrystal, resetVersion, beamBroke
   light: LightPuzzleState; highlightedCrystal: number | null; resetVersion: number; beamBroken: boolean; chargeStep: number;
   claiming: boolean; playerPosition: React.RefObject<[number, number]>; reducedMotion: boolean;
 }) {
-  const seals = traceLight(light.orientations).seals;
+  const seals = traceLight(light).seals;
   const charged = light.phase !== 'routing';
   return <>
     <color attach="background" args={['#313943']} />
@@ -52,7 +52,7 @@ export function LightTemple({ light, highlightedCrystal, resetVersion, beamBroke
     {crystalPositions.map((_, i) => <RotatableCrystal key={i} id={i as 0 | 1 | 2} orientation={light.orientations[i]} resetVersion={resetVersion} highlighted={highlightedCrystal === i} locked={light.phase !== 'routing'} reducedMotion={reducedMotion} />)}
     {[0, 1, 2].map(i => <LightReceiver key={i} index={i} active={seals > i} pulse={charged && chargeStep === i + 1} reducedMotion={reducedMotion} />)}
     <PortalCore phase={light.phase} chargeStep={chargeStep} reducedMotion={reducedMotion} />
-    <LightBeamSystem orientations={light.orientations} broken={beamBroken} charged={charged} reducedMotion={reducedMotion} />
+    <LightBeamSystem light={light} broken={beamBroken} charged={charged} reducedMotion={reducedMotion} />
     {(light.phase === 'shard-ready' || claiming) && <PortalShard claiming={claiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />}
     <ExitGate active={light.phase === 'claimed'} />
     <Dust reducedMotion={reducedMotion} />
