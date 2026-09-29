@@ -50,7 +50,7 @@ async function playEchoRound(page, game, round) {
   for (let i = 0; i < echoSequences[round].length; i++) {
     await stepRune(page, game, echoSequences[round][i]);
     if (i === 0) await page.waitForTimeout(350);
-    if (i < echoSequences[round].length - 1 && !(await echoStatus(game)).includes(`input ${i + 1}`)) throw new Error(`Round ${round + 1} lost step ${i + 1}`);
+    if (i < echoSequences[round].length - 1 && !(await echoStatus(game)).includes(`input ${i + 1}`)) throw new Error(`Round ${round + 1} lost step ${i + 1}: ${await echoStatus(game)}`);
   }
 }
 async function balanceStatus(game) {
@@ -187,6 +187,8 @@ await testGame('.', {
     if (Math.hypot(...(await position(game)).map((value, index) => value - beforeStick[index])) < 0.15) throw new Error('Echo Garden joystick did not move the Friend.');
     await page.screenshot({ path: './artifacts/echo-mobile.png' });
     await page.setViewportSize({ width: 960, height: 800 });
+    await moveTo(page, game, 0, 0, 'echo', 0.7);
+    await game.getByTestId('echo-phase').filter({ hasText: /input; round 1; completed 0; input 0/ }).waitFor({ timeout: 15000 });
     await playEchoRound(page, game, 0);
     if (!(await echoStatus(game)).includes('completed 1')) throw new Error('Round 1 did not complete.');
     await game.getByTestId('echo-phase').filter({ hasText: /input; round 2;/ }).waitFor({ timeout: 15000 });
@@ -363,6 +365,66 @@ await testGame('.', {
     await game.getByRole('button', { name: /ENTER PORTAL IV/ }).click();
     if ((await celestialStatus(game)).phase !== 'claimed') throw new Error('Completed Observatory did not remain aligned.');
     if (await game.getByRole('button', { name: /CLAIM FINAL SHARD/ }).count()) throw new Error('Duplicate final shard claim on re-entry.');
+    await moveTo(page, game, 0, 7.38, 'celestial', 0.32);
+    await game.getByRole('button', { name: /RETURN TO ISLAND/ }).click();
+    await game.getByText('THE MONUMENT IS READY').waitFor();
+    const oldSeed = await game.locator('main.game-shell').getAttribute('data-run-seed');
+    const oldSigil = await game.locator('main.game-shell').getAttribute('data-sigil-id');
+    const oldLight = await game.locator('main.game-shell').getAttribute('data-light-variant');
+    await moveTo(page, game, 0, 0, 'island', 1.7);
+    await game.getByRole('button', { name: /RESTORE THE MONUMENT/ }).waitFor();
+    await page.setViewportSize({ width: 360, height: 800 });
+    await game.getByRole('button', { name: 'ACTION' }).click();
+    await game.getByTestId('restoration-status').filter({ hasText: 'playing; awakening' }).waitFor();
+    if (await game.getByRole('button', { name: /RESTORE THE MONUMENT/ }).count()) throw new Error('Monument activation remained available during finale.');
+    for (const stage of ['light', 'echo', 'balance', 'celestial', 'sockets', 'monument', 'sigil', 'restored']) {
+      await game.getByTestId('restoration-status').filter({ hasText: `playing; ${stage}` }).waitFor({ timeout: 5000 });
+      if (stage === 'sigil') { await page.waitForTimeout(1400); await page.screenshot({ path: './artifacts/restoration-sigil.png' }); }
+    }
+    await game.getByRole('dialog', { name: 'Journey restored' }).waitFor({ timeout: 5000 });
+    if ((await game.locator('main.game-shell').getAttribute('data-restoration')) !== 'complete') throw new Error('Finale never reached authoritative completion.');
+    await game.getByRole('img', { name: 'Your Journey Sigil' }).waitFor();
+    await game.getByText('4 / 4 PORTALS RESTORED').waitFor();
+    await page.screenshot({ path: './artifacts/restoration-mobile.png' });
+    const dialogBox = await game.getByRole('dialog', { name: 'Journey restored' }).boundingBox();
+    if (!dialogBox || dialogBox.height > 800) throw new Error('Completion screen overflows phone height.');
+    await game.getByRole('button', { name: 'EXPLORE RESTORED ISLAND' }).click();
+    await game.getByRole('dialog', { name: 'Journey restored' }).waitFor({ state: 'hidden' });
+    if ((await game.locator('main.game-shell').getAttribute('data-restoration')) !== 'complete') throw new Error('Explore lost restored state.');
+    await page.setViewportSize({ width: 960, height: 800 });
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: './artifacts/restored-island-desktop.png' });
+    await page.setViewportSize({ width: 360, height: 800 });
+    const restoredPosition = await position(game);
+    const joystick = game.getByRole('group', { name: 'Movement joystick' });
+    const joystickBox = await joystick.boundingBox();
+    if (!joystickBox) throw new Error('Restored island joystick missing.');
+    const jx = joystickBox.x + joystickBox.width / 2, jy = joystickBox.y + joystickBox.height / 2;
+    await page.mouse.move(jx, jy); await page.mouse.down(); await page.mouse.move(jx + 20, jy, { steps: 3 }); await page.waitForTimeout(350); await page.mouse.up();
+    if (Math.hypot(...(await position(game)).map((value, index) => value - restoredPosition[index])) < 0.1) throw new Error('Movement did not return after Explore.');
+    await moveTo(page, game, 0, 0, 'island', 1.7);
+    if (!(await promptText(game))?.includes('VIEW JOURNEY SIGIL')) throw new Error('Restored monument did not offer an explicit sigil review.');
+    await game.getByRole('button', { name: 'ACTION' }).click();
+    await game.getByRole('button', { name: 'NEW JOURNEY' }).click();
+    await game.getByText('Begin a new journey?').waitFor();
+    await game.getByRole('button', { name: 'CANCEL' }).click();
+    if (await game.getByRole('button', { name: 'BEGIN', exact: true }).count()) throw new Error('New Journey confirmation did not cancel.');
+    await game.getByRole('button', { name: 'NEW JOURNEY' }).click();
+    await game.getByRole('button', { name: 'BEGIN', exact: true }).click();
+    await game.getByRole('dialog', { name: 'Journey restored' }).waitFor({ state: 'hidden' });
+    if ((await game.locator('main.game-shell').getAttribute('data-run-seed')) === oldSeed) throw new Error('New Journey reused the seed.');
+    if ((await game.locator('main.game-shell').getAttribute('data-light-variant')) === oldLight) throw new Error('New Journey reused the Light solution.');
+    if ((await game.locator('main.game-shell').getAttribute('data-sigil-id')) === oldSigil) throw new Error('New Journey reused the sigil.');
+    if ((await game.locator('main.game-shell').getAttribute('data-restoration')) !== 'dormant') throw new Error('New Journey retained restored state.');
+    if (!(await game.getByTestId('shard-count').textContent())?.includes('SHARDS 0 / 4')) throw new Error('New Journey kept shards.');
+    if ((await game.getByTestId('portal-status').textContent()) !== 'Portal 1 active. Portal 2 locked. Portal 3 locked. Portal 4 locked') throw new Error('New Journey portal states are wrong.');
+    await page.screenshot({ path: './artifacts/new-journey-mobile.png' });
+    const newPosition = await position(game);
+    const newJoystickBox = await joystick.boundingBox();
+    if (!newJoystickBox) throw new Error('New Journey joystick missing.');
+    const nx = newJoystickBox.x + newJoystickBox.width / 2, ny = newJoystickBox.y + newJoystickBox.height / 2;
+    await page.mouse.move(nx, ny); await page.mouse.down(); await page.mouse.move(nx + 20, ny, { steps: 3 }); await page.waitForTimeout(350); await page.mouse.up();
+    if (Math.hypot(...(await position(game)).map((value, index) => value - newPosition[index])) < 0.1) throw new Error('New Journey controls did not recover.');
   },
 });
 await testGame('.', { width: 360, screenshot: './artifacts/mobile.png', check: async ({ page, game }) => {

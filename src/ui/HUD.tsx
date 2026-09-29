@@ -4,6 +4,7 @@ import { plateWeights, type BalancePuzzleState } from '../portals/balance/Balanc
 import { balanceLayouts } from '../portals/balance/balanceLayouts';
 import type { CelestialPuzzleState } from '../portals/celestial/CelestialPuzzleState';
 import { constellations, ringNames } from '../portals/celestial/celestialConfig';
+import { restorationStages, type RestorationPhase, type RestorationStage } from '../finale/RestorationState';
 function echoLabel(echo: EchoPuzzleState) {
   const round = Math.min(echo.round + 1, 3);
   if (echo.phase === 'input') return `ROUND ${round} · ECHO  ${echo.inputIndex} / ${echo.sequences[echo.round].length}`;
@@ -15,19 +16,21 @@ function echoLabel(echo: EchoPuzzleState) {
   if (echo.phase === 'claimed') return 'ECHO GARDEN RESTORED';
   return 'LISTEN · REMEMBER · REPEAT';
 }
-export function HUD({ friend, scene, nearby, onInteract, muted, onToggleMute, shards, seals, canReset, onReset, intro, banner, portalStatuses, echo, echoCallout, balance, balanceCallout, celestial, celestialCallout }: {
+export function HUD({ friend, scene, nearby, onInteract, muted, onToggleMute, shards, seals, canReset, onReset, intro, banner, portalStatuses, echo, echoCallout, balance, balanceCallout, celestial, celestialCallout, restorationPhase, restorationStage }: {
   friend: string; scene: SceneId; nearby: string | null; onInteract: () => void; muted: boolean; onToggleMute: () => void;
   shards: number; seals: number; canReset: boolean; onReset: () => void; intro: boolean; banner: string | null; portalStatuses: readonly string[];
   echo: EchoPuzzleState; echoCallout: string | null; balance: BalancePuzzleState; balanceCallout: string | null; celestial: CelestialPuzzleState; celestialCallout: string | null;
+  restorationPhase: RestorationPhase; restorationStage: RestorationStage | null;
 }) {
   const title = scene === 'ISLAND' ? 'THE FLOATING ISLE' : scene === 'TEMPLE_LIGHT' ? 'TEMPLE OF LIGHT' : scene === 'ECHO_GARDEN' ? 'ECHO GARDEN' : scene === 'TEMPLE_BALANCE' ? 'TEMPLE OF BALANCE' : 'CELESTIAL OBSERVATORY';
-  const subtitle = scene === 'ISLAND' ? shards === 0 ? 'Find the first portal' : shards === 1 ? 'The Echo Garden awakens' : shards === 2 ? 'The Balance Temple awakens' : shards === 3 ? 'The Celestial Observatory awakens' : 'THE MONUMENT IS READY'
+  const subtitle = scene === 'ISLAND' ? restorationPhase === 'complete' ? 'THE ISLAND IS RESTORED' : restorationPhase === 'playing' ? 'THE FOUR PORTALS ANSWER' : shards === 0 ? 'Find the first portal' : shards === 1 ? 'The Echo Garden awakens' : shards === 2 ? 'The Balance Temple awakens' : shards === 3 ? 'The Celestial Observatory awakens' : 'THE MONUMENT IS READY'
     : scene === 'TEMPLE_LIGHT' ? `LIGHT SEALS  ${seals} / 3` : scene === 'ECHO_GARDEN' ? echoLabel(echo)
       : scene === 'TEMPLE_BALANCE' ? balance.stage === 0 ? 'I · LEARN WEIGHT' : balance.stage === 1 ? 'II · REDISTRIBUTE' : balance.stage === 2 ? 'III · RESTORE BOTH SIDES' : 'BALANCE RESTORED'
         : celestial.phase === 'claimed' ? 'THE STARS ARE ALIGNED' : celestial.phase === 'shard-ready' ? 'CLAIM THE FINAL SHARD' : `RINGS ALIGNED  ${celestial.lockedCount} / 3`;
   const balanceWeights = plateWeights(balance), balanceTargets = balanceLayouts[balance.layout].targets;
   return <div className="hud">
     <p className="sr-only" role="status" data-testid="portal-status">{portalStatuses.map((status, index) => `Portal ${index + 1} ${status}`).join('. ')}</p>
+    <p className="sr-only" role="status" data-testid="restoration-status">{restorationPhase}; {restorationStage ?? 'none'}</p>
     {scene === 'ECHO_GARDEN' && <p className="sr-only" role="status" data-testid="echo-phase">{echo.phase}; round {Math.min(echo.round + 1, 3)}; completed {echo.completedRounds}; input {echo.inputIndex}</p>}
     {scene === 'TEMPLE_BALANCE' && <p className="sr-only" role="status" data-testid="balance-state">layout {balance.layout}; stage {balance.stage}; phase {balance.phase}; blocks {balance.blocks.map(cell => cell.join(',')).join('|')}; A {balanceWeights.A}/{balanceTargets.A}; B {balanceWeights.B}/{balanceTargets.B}; C {balanceWeights.C}/{balanceTargets.C}</p>}
     {scene === 'CELESTIAL_OBSERVATORY' && <p className="sr-only" role="status" data-testid="celestial-state">constellation {celestial.constellation}; phase {celestial.phase}; locked {celestial.lockedCount}; retry {celestial.retryRing ?? 'none'}</p>}
@@ -41,6 +44,7 @@ export function HUD({ friend, scene, nearby, onInteract, muted, onToggleMute, sh
     {echoCallout && <div className="echo-callout" role="status">{echoCallout}</div>}
     {balanceCallout && <div className="balance-callout" role="status">{balanceCallout}</div>}
     {celestialCallout && <div className="celestial-callout" role="status">{celestialCallout}{celestial.phase === 'clue' && <small>{constellations[celestial.constellation].name}</small>}</div>}
+    {scene === 'ISLAND' && restorationStage && <div className={`restoration-callout ${restorationStage}`} role="status">{restorationStages.find(stage => stage.id === restorationStage)?.label}</div>}
     {banner && <div className={`acquired-banner ${scene === 'ECHO_GARDEN' ? 'echo-banner' : scene === 'TEMPLE_BALANCE' ? 'balance-banner' : scene === 'CELESTIAL_OBSERVATORY' ? 'celestial-banner' : ''}`} role="status">{banner}</div>}
     {nearby && <button className="interaction" onClick={onInteract}><kbd>E</kbd> {nearby}</button>}
     <div className="controls-hint">WASD / ARROWS TO MOVE · E TO INTERACT</div>

@@ -6,6 +6,8 @@ import { createRunSeed, type RunSeed } from './seededRun';
 import { lightVariantForSeed } from '../portals/light/LightPuzzleState';
 import { finishBalanceMechanism, initialBalancePuzzle, pushBalanceBlock, resetBalancePuzzle, revealBalanceShard, type BalancePuzzleState, type PushDirection } from '../portals/balance/BalancePuzzleState';
 import { initialCelestialPuzzle, materializeCelestialShard, resetCelestialPuzzle, type CelestialPuzzleState } from '../portals/celestial/CelestialPuzzleState';
+import { beginRestoration, finishRestoration, initialRestorationState, type RestorationState } from '../finale/RestorationState';
+import { journeySigilForSeed } from '../finale/JourneySigilConfig';
 export type SceneId = 'ISLAND' | 'TEMPLE_LIGHT' | 'ECHO_GARDEN' | 'TEMPLE_BALANCE' | 'CELESTIAL_OBSERVATORY';
 export type PortalStatus = 'active' | 'locked' | 'complete';
 export type GameState = Readonly<{
@@ -16,22 +18,32 @@ export type GameState = Readonly<{
   echo: EchoPuzzleState;
   balance: BalancePuzzleState;
   celestial: CelestialPuzzleState;
+  restoration: RestorationState;
   pendingIslandEvent: number | null;
   islandEvent: number | null;
 }>;
 export function createInitialGameState(runSeed: RunSeed): GameState {
-  return { runSeed, scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), balance: initialBalancePuzzle(runSeed), celestial: initialCelestialPuzzle(runSeed), pendingIslandEvent: null, islandEvent: null };
+  return { runSeed, scene: 'ISLAND', completedPortals: [], light: initialLightPuzzle(runSeed), echo: initialEchoPuzzle(runSeed), balance: initialBalancePuzzle(runSeed), celestial: initialCelestialPuzzle(runSeed), restoration: initialRestorationState, pendingIslandEvent: null, islandEvent: null };
 }
 export function restoreGameState(progress: GameProgress): GameState {
-  return { ...createInitialGameState(progress.runSeed), completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo, balance: progress.balance, celestial: progress.celestial };
+  return { ...createInitialGameState(progress.runSeed), completedPortals: progress.completedPortals, light: progress.light, echo: progress.echo, balance: progress.balance, celestial: progress.celestial, restoration: progress.restoration ?? initialRestorationState };
 }
-export function gameProgress(state: GameState): GameProgress { return { runSeed: state.runSeed, completedPortals: state.completedPortals, light: state.light, echo: state.echo, balance: state.balance, celestial: state.celestial }; }
-/** A normal new journey guarantees an immediately different light configuration. */
+export function gameProgress(state: GameState): GameProgress { return { runSeed: state.runSeed, completedPortals: state.completedPortals, light: state.light, echo: state.echo, balance: state.balance, celestial: state.celestial, restoration: state.restoration }; }
+export function activateRestoration(state: GameState, now: number): GameState {
+  const restoration = beginRestoration(state.restoration, state.completedPortals.length === 4, state.scene === 'ISLAND', now);
+  return restoration === state.restoration ? state : { ...state, restoration, islandEvent: null };
+}
+export function completeRestoration(state: GameState): GameState {
+  const restoration = finishRestoration(state.restoration);
+  return restoration === state.restoration ? state : { ...state, restoration };
+}
+/** A normal new journey guarantees a different light configuration and displayed sigil. */
 export function startNewJourney(previous: GameState, fixedSeed?: RunSeed): GameState {
   if (fixedSeed !== undefined) return createInitialGameState(fixedSeed);
+  const previousSigil = journeySigilForSeed(previous.runSeed).id;
   for (let attempt = 0; attempt < 32; attempt++) {
     const runSeed = createRunSeed();
-    if (runSeed !== previous.runSeed && lightVariantForSeed(runSeed) !== lightVariantForSeed(previous.runSeed)) return createInitialGameState(runSeed);
+    if (runSeed !== previous.runSeed && lightVariantForSeed(runSeed) !== lightVariantForSeed(previous.runSeed) && journeySigilForSeed(runSeed).id !== previousSigil) return createInitialGameState(runSeed);
   }
   throw new Error('Unable to create a distinct journey seed.');
 }
@@ -40,7 +52,7 @@ export function portalStatus(state: GameState, portal: number): PortalStatus {
   return portal === state.completedPortals.length + 1 ? 'active' : 'locked';
 }
 export function enterPortal(state: GameState, portal: number): GameState {
-  if (state.scene !== 'ISLAND' || portalStatus(state, portal) === 'locked') return state;
+  if (state.scene !== 'ISLAND' || state.restoration.phase === 'playing' || portalStatus(state, portal) === 'locked') return state;
   if (portal === 1) return { ...state, scene: 'TEMPLE_LIGHT', islandEvent: null };
   if (portal === 2) return { ...state, scene: 'ECHO_GARDEN', echo: prepareEchoEntry(state.echo), islandEvent: null };
   if (portal === 3) return { ...state, scene: 'TEMPLE_BALANCE', islandEvent: null };

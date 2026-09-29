@@ -1,5 +1,5 @@
 import { echoRunes, type RuneId } from '../portals/echo/echoConfig';
-export type SoundCue = 'footstep' | 'portal-ambience' | 'portal-unlock' | 'interaction' | 'puzzle-success' | 'puzzle-failure' | 'shard-acquire' | 'final-completion' | 'crystal-rotate' | 'beam-connect' | 'seal-activate' | 'shard-materialize' | 'shard-claim' | 'echo-sequence-start' | 'echo-wrong' | 'echo-round-complete' | 'echo-complete' | 'echo-shard-materialize' | 'echo-shard-claim' | 'echo-portal-unlock' | 'balance-slide' | 'balance-blocked' | 'balance-under' | 'balance-over' | 'balance-plate' | 'balance-chain' | 'balance-bridge' | 'balance-complete' | 'balance-shard-materialize' | 'balance-shard-claim' | 'balance-portal-unlock' | 'celestial-ambience' | 'celestial-ring' | 'celestial-tick' | 'celestial-control' | 'celestial-lock' | 'celestial-perfect' | 'celestial-miss' | 'celestial-formation' | 'celestial-star' | 'celestial-shard-materialize' | 'celestial-shard-claim';
+export type SoundCue = 'footstep' | 'portal-ambience' | 'portal-unlock' | 'interaction' | 'puzzle-success' | 'puzzle-failure' | 'shard-acquire' | 'final-completion' | 'crystal-rotate' | 'beam-connect' | 'seal-activate' | 'shard-materialize' | 'shard-claim' | 'echo-sequence-start' | 'echo-wrong' | 'echo-round-complete' | 'echo-complete' | 'echo-shard-materialize' | 'echo-shard-claim' | 'echo-portal-unlock' | 'balance-slide' | 'balance-blocked' | 'balance-under' | 'balance-over' | 'balance-plate' | 'balance-chain' | 'balance-bridge' | 'balance-complete' | 'balance-shard-materialize' | 'balance-shard-claim' | 'balance-portal-unlock' | 'celestial-ambience' | 'celestial-ring' | 'celestial-tick' | 'celestial-control' | 'celestial-lock' | 'celestial-perfect' | 'celestial-miss' | 'celestial-formation' | 'celestial-star' | 'celestial-shard-materialize' | 'celestial-shard-claim' | 'finale-awaken' | 'finale-light' | 'finale-echo' | 'finale-balance' | 'finale-celestial' | 'finale-sockets' | 'finale-transform' | 'finale-sigil';
 const tones: Record<SoundCue, readonly [number, number, number]> = {
   footstep: [135, 105, 0.08], 'portal-ambience': [180, 220, 0.45], 'portal-unlock': [390, 780, 0.55],
   interaction: [410, 550, 0.17], 'puzzle-success': [550, 880, 0.42], 'puzzle-failure': [220, 170, 0.25],
@@ -18,6 +18,9 @@ const tones: Record<SoundCue, readonly [number, number, number]> = {
   'celestial-control': [280, 405, 0.13], 'celestial-lock': [340, 600, 0.37], 'celestial-perfect': [450, 850, 0.52],
   'celestial-miss': [240, 155, 0.27], 'celestial-formation': [210, 520, 1.05], 'celestial-star': [520, 710, 0.28],
   'celestial-shard-materialize': [490, 940, 0.82], 'celestial-shard-claim': [550, 1130, 0.82],
+  'finale-awaken': [160, 300, 0.6], 'finale-light': [600, 990, 0.55], 'finale-echo': [392, 784, 0.72],
+  'finale-balance': [145, 340, 0.62], 'finale-celestial': [360, 860, 0.85], 'finale-sockets': [490, 760, 0.48],
+  'finale-transform': [250, 650, 1.1], 'finale-sigil': [620, 1140, 1.25],
 };
 /** Original temporary procedural cues. No SDK sound is claimed or used. */
 export class AudioManager {
@@ -26,7 +29,8 @@ export class AudioManager {
   private echoVoices = new Set<OscillatorNode>();
   private balanceVoices = new Set<OscillatorNode>();
   private celestialVoices = new Set<OscillatorNode>();
-  setMuted(value: boolean) { this.muted = value; if (value) { this.stopEcho(); this.stopBalance(); this.stopCelestial(); } }
+  private finaleVoices = new Set<OscillatorNode>();
+  setMuted(value: boolean) { this.muted = value; if (value) { this.stopEcho(); this.stopBalance(); this.stopCelestial(); this.stopFinale(); } }
   isMuted() { return this.muted; }
   private getContext() {
     if (this.muted || !('AudioContext' in window)) return null;
@@ -52,6 +56,7 @@ export class AudioManager {
     if (cue.startsWith('echo-')) this.trackEcho(sound);
     if (cue.startsWith('balance-')) { this.balanceVoices.add(sound); sound.onended = () => this.balanceVoices.delete(sound); }
     if (cue.startsWith('celestial-')) { this.celestialVoices.add(sound); sound.onended = () => this.celestialVoices.delete(sound); }
+    if (cue.startsWith('finale-')) { this.finaleVoices.add(sound); sound.onended = () => this.finaleVoices.delete(sound); }
     sound.start(now); sound.stop(now + duration + 0.01);
   }
   playEchoRune(rune: RuneId) {
@@ -73,6 +78,7 @@ export class AudioManager {
   }
   stopBalance() { for (const voice of this.balanceVoices) { try { voice.stop(); } catch { /* Already ended. */ } } this.balanceVoices.clear(); }
   stopCelestial() { for (const voice of this.celestialVoices) { try { voice.stop(); } catch { /* Already ended. */ } } this.celestialVoices.clear(); }
+  stopFinale() { for (const voice of this.finaleVoices) { try { voice.stop(); } catch { /* Already ended. */ } } this.finaleVoices.clear(); }
   celestialVoiceCount() { return this.celestialVoices.size; }
-  dispose() { this.stopEcho(); this.stopBalance(); this.stopCelestial(); void this.context?.close(); this.context = null; }
+  dispose() { this.stopEcho(); this.stopBalance(); this.stopCelestial(); this.stopFinale(); void this.context?.close(); this.context = null; }
 }

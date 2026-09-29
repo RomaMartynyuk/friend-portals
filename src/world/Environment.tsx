@@ -10,14 +10,14 @@ function Tree({ x, z, scale = 1 }: { x: number; z: number; scale?: number }) {
     <mesh castShadow position={[0, 2.13, 0]}><coneGeometry args={[0.66, 1.15, 6]} /><meshStandardMaterial color="#52917b" flatShading /></mesh>
   </group>;
 }
-export function Environment({ runSeed, identitySeed, reducedMotion }: { runSeed: RunSeed; identitySeed: number; reducedMotion: boolean }) {
+export function Environment({ runSeed, identitySeed, reducedMotion, restored = false }: { runSeed: RunSeed; identitySeed: number; reducedMotion: boolean; restored?: boolean }) {
   const cloud = useRef<Group>(null);
   const cosmetics = useMemo(() => createWorldCosmetics(runSeed, identitySeed), [runSeed, identitySeed]);
   useFrame(({ clock }) => { if (cloud.current && !reducedMotion) cloud.current.rotation.y = clock.elapsedTime * 0.012; });
   return <>
-    <color attach="background" args={[cosmetics.sky]} />
-    <fog attach="fog" args={[cosmetics.sky, 22, 56]} />
-    <ambientLight intensity={1.25} color="#dbe9d7" />
+    <color attach="background" args={[restored ? '#a9c7c4' : cosmetics.sky]} />
+    <fog attach="fog" args={[restored ? '#a9c7c4' : cosmetics.sky, 22, 56]} />
+    <ambientLight intensity={restored ? 1.42 : 1.25} color="#dbe9d7" />
     <hemisphereLight args={['#e9f1e5', '#526f6b', 1.45]} />
     <directionalLight position={[8, 15, 9]} intensity={2.6} castShadow shadow-mapSize={[1024, 1024]} shadow-camera-left={-15} shadow-camera-right={15} shadow-camera-top={15} shadow-camera-bottom={-15} shadow-bias={-0.0005} />
     <group ref={cloud} position={[0, -7.3, 0]}>
@@ -33,7 +33,7 @@ export function Environment({ runSeed, identitySeed, reducedMotion }: { runSeed:
     </group>)}
     {cosmetics.flowers.map(flower => <group key={flower.id} position={[flower.x, 0.08, flower.z]}>
       <mesh position={[0, 0.18, 0]}><cylinderGeometry args={[0.035, 0.035, 0.36, 4]} /><meshStandardMaterial color="#507e65" /></mesh>
-      <mesh position={[0, 0.37, 0]}><octahedronGeometry args={[0.13, 0]} /><meshStandardMaterial color={flower.color} /></mesh>
+      <mesh position={[0, 0.37, 0]} scale={restored ? 1.35 : 1}><octahedronGeometry args={[0.13, 0]} /><meshStandardMaterial color={flower.color} emissive={restored ? flower.color : '#000000'} emissiveIntensity={restored ? 0.2 : 0} /></mesh>
     </group>)}
   </>;
 }

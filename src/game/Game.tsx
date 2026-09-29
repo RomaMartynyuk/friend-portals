@@ -2,7 +2,7 @@ import { Canvas } from '@react-three/fiber';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameComponentProps } from '@rarefriends/friendsdk/runtime';
 import { gameSession } from '../sdk/friendSdkAdapter';
-import { claimShard, claimEchoShard, claimBalanceShard, claimCelestialShard, enterEchoRune, startEchoInput, replayEchoRound, nextEchoRound, materializeEchoShard, materializeBalanceShard, moveBalanceBlock, resetBalance, resetCelestial, settleBalance, enterPortal, finishIslandEvent, gameProgress, portalStatus, resetPuzzle, restoreGameState, returnToIsland, revealShard, revealCelestialShard, rotateCrystal, saveCelestialState, type GameState } from './GameState';
+import { activateRestoration, completeRestoration, startNewJourney, claimShard, claimEchoShard, claimBalanceShard, claimCelestialShard, enterEchoRune, startEchoInput, replayEchoRound, nextEchoRound, materializeEchoShard, materializeBalanceShard, moveBalanceBlock, resetBalance, resetCelestial, settleBalance, enterPortal, finishIslandEvent, gameProgress, portalStatus, resetPuzzle, restoreGameState, returnToIsland, revealShard, revealCelestialShard, rotateCrystal, saveCelestialState, type GameState } from './GameState';
 import { sessionProgressStore } from './ProgressStore';
 import { crystalPositions, traceLight, type CrystalId } from '../portals/light/LightPuzzleState';
 import { echoRunes, echoTriggerRadius, type RuneId } from '../portals/echo/echoConfig';
@@ -24,9 +24,12 @@ import { Player } from '../player/Player';
 import { portalConfig } from '../portals/Portal';
 import { HUD } from '../ui/HUD';
 import { MobileControls } from '../ui/MobileControls';
+import { CompletionScreen } from '../ui/CompletionScreen';
+import { journeySigilForSeed } from '../finale/JourneySigilConfig';
+import { RESTORATION_SECONDS, restorationStage, restorationStages, type RestorationStage } from '../finale/RestorationState';
 import '../../style.css';
 
-type Nearby = Readonly<{ type: 'portal' | 'crystal' | 'shard' | 'echo-shard' | 'balance-shard' | 'balance-block' | 'celestial-control' | 'celestial-observe' | 'celestial-shard' | 'exit' | 'unavailable'; id: number; label: string; actionable: boolean }>;
+type Nearby = Readonly<{ type: 'portal' | 'crystal' | 'shard' | 'echo-shard' | 'balance-shard' | 'balance-block' | 'celestial-control' | 'celestial-observe' | 'celestial-shard' | 'monument' | 'monument-review' | 'exit' | 'unavailable'; id: number; label: string; actionable: boolean }>;
 const sameNearby = (a: Nearby | null, b: Nearby | null) => a?.type === b?.type && a?.id === b?.id && a?.label === b?.label;
 export default function Game(props: GameComponentProps) {
   const session = gameSession(props);
@@ -63,6 +66,12 @@ export default function Game(props: GameComponentProps) {
   const [celestialMissedRing, setCelestialMissedRing] = useState<RingId | null>(null);
   const [celestialPerfectRing, setCelestialPerfectRing] = useState<RingId | null>(null);
   const [celestialClaiming, setCelestialClaiming] = useState(false);
+  const [restorationSeconds, setRestorationSeconds] = useState(0);
+  const [completionOpen, setCompletionOpen] = useState(false);
+  const finaleInteractionLock = useRef(false);
+  const finalePlayedStages = useRef(new Set<RestorationStage>());
+  const previousRestorationPhase = useRef(state.restoration.phase);
+  const sigil = useMemo(() => journeySigilForSeed(state.runSeed), [state.runSeed]);
   const introSeen = useRef(false);
   const echoIntroSeen = useRef(false);
   const balanceIntroSeen = useRef(false);
@@ -143,8 +152,16 @@ export default function Game(props: GameComponentProps) {
   }, [state.scene, state.light.phase, state.balance.phase, state.celestial, state.runSeed, props.paused, updateState, audio]);
   const interact = useCallback(() => {
     const near = nearRef.current;
-    if (!near?.actionable || props.paused || status !== 'ready' || transitionLock.current) return;
-    if (near.type === 'portal') {
+    if (!near?.actionable || props.paused || status !== 'ready' || transitionLock.current || completionOpen) return;
+    if (near.type === 'monument') {
+      if (finaleInteractionLock.current || state.restoration.phase !== 'dormant' || state.completedPortals.length !== 4) return;
+      finaleInteractionLock.current = true;
+      nearRef.current = null; setNearby(null);
+      audio.play('finale-awaken');
+      updateState(previous => activateRestoration(previous, Date.now()));
+    } else if (near.type === 'monument-review') {
+      if (state.restoration.phase === 'complete') setCompletionOpen(true);
+    } else if (near.type === 'portal') {
       transitionLock.current = true; audio.play('interaction'); updateState(previous => enterPortal(previous, near.id));
       setTimeout(() => { transitionLock.current = false; }, 350);
     } else if (near.type === 'exit') {
@@ -224,8 +241,8 @@ export default function Game(props: GameComponentProps) {
         setTimeout(() => setBanner(null), 2100);
       }, reducedMotion ? 120 : 700);
     }
-  }, [props.paused, status, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, reducedMotion, audio, updateState, exitRoom, liveCelestial, setCelestialSnapshot]);
-  const input = useMovementInput(props.paused || status !== 'ready', interact);
+  }, [props.paused, status, completionOpen, state.restoration.phase, state.completedPortals.length, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, reducedMotion, audio, updateState, exitRoom, liveCelestial, setCelestialSnapshot]);
+  const input = useMovementInput(props.paused || status !== 'ready' || state.restoration.phase === 'playing' || completionOpen, interact);
   useEffect(() => { let active = true; setStatus('loading'); void props.client.read().then(snapshot => {
     if (!active) return;
     if (snapshot.friendId !== props.friendId) throw new Error('Selected Friend changed. Please re-enter the game.');
@@ -380,6 +397,41 @@ export default function Game(props: GameComponentProps) {
     }, 35);
     return () => clearInterval(interval);
   }, [state.scene, state.islandEvent, props.paused, reducedMotion, updateState, audio]);
+  useEffect(() => {
+    if (state.restoration.phase !== 'playing' || state.restoration.startedAt === null) return;
+    const startedAt = state.restoration.startedAt;
+    const tick = () => {
+      if (document.hidden || props.paused) return;
+      const elapsed = Math.min(RESTORATION_SECONDS, Math.max(0, (Date.now() - startedAt) / 1000));
+      setRestorationSeconds(elapsed);
+      const stage = restorationStage(elapsed);
+      if (!finalePlayedStages.current.has(stage)) {
+        for (const entry of restorationStages) if (entry.at <= elapsed) finalePlayedStages.current.add(entry.id);
+        const cue = ({ light: 'finale-light', echo: 'finale-echo', balance: 'finale-balance', celestial: 'finale-celestial', sockets: 'finale-sockets', monument: 'finale-transform', sigil: 'finale-sigil', restored: 'final-completion' } as const)[stage as Exclude<RestorationStage, 'awakening'>];
+        if (cue) audio.play(cue);
+      }
+      if (elapsed >= RESTORATION_SECONDS) updateState(completeRestoration);
+    };
+    tick();
+    const timer = setInterval(tick, 70);
+    document.addEventListener('visibilitychange', tick);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
+  }, [state.restoration.phase, state.restoration.startedAt, props.paused, updateState, audio]);
+  useEffect(() => {
+    if (state.restoration.phase === 'complete' && previousRestorationPhase.current !== 'complete') {
+      setRestorationSeconds(RESTORATION_SECONDS);
+      setCompletionOpen(true);
+    }
+    previousRestorationPhase.current = state.restoration.phase;
+  }, [state.restoration.phase]);
+  const beginNewJourney = useCallback(() => {
+    audio.stopFinale(); audio.stopEcho(); audio.stopBalance(); audio.stopCelestial();
+    finaleInteractionLock.current = false; finalePlayedStages.current.clear();
+    introSeen.current = false; echoIntroSeen.current = false; balanceIntroSeen.current = false; celestialIntroSeen.current = false;
+    nearRef.current = null; setNearby(null); playerPosition.current = [0, -3.9];
+    setCompletionOpen(false); setRestorationSeconds(0); setBanner(null); setFlash(false); setUnlockProgress(1);
+    updateState(previous => startNewJourney(previous));
+  }, [audio, updateState]);
   useEffect(() => { const onKey = (event: KeyboardEvent) => { if (event.key.toLowerCase() === 'r' && !event.repeat) reset(); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [reset]);
   const onEchoRuneEntry = useCallback((rune: RuneId) => {
     if (props.paused || transitionLock.current) return;
@@ -399,8 +451,16 @@ export default function Game(props: GameComponentProps) {
     playerPosition.current = [x, z];
     if (gameShell.current) { gameShell.current.dataset.playerX = x.toFixed(2); gameShell.current.dataset.playerZ = z.toFixed(2); gameShell.current.dataset.celestialVoices = String(audio.celestialVoiceCount()); }
     let next: Nearby | null = null;
-    if (state.scene === 'ISLAND') {
+    if (state.scene === 'ISLAND' && state.restoration.phase === 'playing') {
+      next = null;
+    } else if (state.scene === 'ISLAND') {
+      if (state.completedPortals.length === 4 && Math.hypot(x, z) < 2.8) {
+        next = state.restoration.phase === 'complete'
+          ? { type: 'monument-review', id: 0, label: 'VIEW JOURNEY SIGIL', actionable: true }
+          : { type: 'monument', id: 0, label: 'RESTORE THE MONUMENT', actionable: true };
+      }
       for (let i = 0; i < portalConfig.length; i++) {
+        if (next) break;
         const p = portalConfig[i];
         if (Math.hypot(x - p.x, z - p.z) < 2.25) {
           const status = portalStatus(state, i + 1);
@@ -439,19 +499,20 @@ export default function Game(props: GameComponentProps) {
       if (!next && state.celestial.phase === 'running' && Math.hypot(x, z - 2.95) < 1.18) next = { type: 'celestial-observe', id: 0, label: 'VIEW CONSTELLATION', actionable: true };
     }
     if (!sameNearby(nearRef.current, next)) { nearRef.current = next; setNearby(next); }
-  }, [state.scene, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, state.celestial.lockedCount, state.completedPortals, onEchoRuneEntry, audio]);
+  }, [state.scene, state.restoration.phase, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, state.celestial.lockedCount, state.completedPortals, onEchoRuneEntry, audio]);
   if (status !== 'ready') return <div className="startup" role={status === 'error' ? 'alert' : 'status'}><strong>FRIEND PORTALS</strong><p>{status === 'error' ? error : 'Opening the island…'}</p>{status === 'error' && <button onClick={() => { setStatus('loading'); void props.client.read().then(() => setStatus('ready')).catch(cause => { setError(String(cause)); setStatus('error'); }); }}>RETRY</button>}</div>;
-  return <main ref={gameShell} className="game-shell" aria-label="Friend Portals game" data-run-seed={state.runSeed}>
+  return <main ref={gameShell} className="game-shell" aria-label="Friend Portals game" data-run-seed={state.runSeed} data-light-variant={state.light.variant} data-balance-layout={state.balance.layout} data-celestial-constellation={state.celestial.constellation} data-sigil-id={sigil.id} data-restoration={state.restoration.phase}>
     <Canvas shadows dpr={[1, 1.5]} camera={{ fov: 42, near: 0.1, far: 90, position: [10, 14, 18] }} gl={{ antialias: true, powerPreference: 'high-performance' }}>
-      {state.scene === 'ISLAND' ? <Island state={state} identitySeed={Number(props.friendId % 1000n)} reducedMotion={reducedMotion} unlockProgress={unlockProgress} />
+      {state.scene === 'ISLAND' ? <Island state={state} identitySeed={Number(props.friendId % 1000n)} reducedMotion={reducedMotion} unlockProgress={unlockProgress} restorationSeconds={restorationSeconds} sigil={sigil} />
         : state.scene === 'TEMPLE_LIGHT' ? <LightTemple light={state.light} highlightedCrystal={nearby?.type === 'crystal' ? nearby.id : null} resetVersion={resetVersion} beamBroken={beamBroken} chargeStep={chargeStep} claiming={claiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
         : state.scene === 'ECHO_GARDEN' ? <EchoGarden echo={state.echo} activeRune={echoActiveRune} wrongRune={echoWrongRune} pulseAll={echoPulseAll} claiming={echoClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
           : state.scene === 'TEMPLE_BALANCE' ? <BalanceTemple balance={state.balance} nearbyBlock={nearby?.type === 'balance-block' ? nearby.id : null} resistedBlock={balanceResistedBlock} resetVersion={balanceResetVersion} chargeStep={balanceChargeStep} claiming={balanceClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
             : <CelestialObservatory state={state.celestial} config={celestialConfig} liveState={liveCelestial} finalStep={celestialFinalStep} missedRing={celestialMissedRing} perfectRing={celestialPerfectRing} claiming={celestialClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} onSymbolPass={onCelestialSymbolPass} />}
-      <Player key={state.scene} cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : state.scene === 'ECHO_GARDEN' ? [7, 11, 13] : state.scene === 'TEMPLE_BALANCE' ? [8, 11, 15] : [8, 12, 16]} reducedMotion={reducedMotion} identity={session.identity} vector={input.vector} onPosition={reportPosition} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : state.scene === 'ECHO_GARDEN' ? 7.7 : state.scene === 'TEMPLE_BALANCE' ? 8.8 : 8.25} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : state.scene === 'ECHO_GARDEN' ? [0, 3.9] : [0, 6.35]} canMove={state.scene === 'TEMPLE_BALANCE' ? (x, z) => balanceWalkable(state.balance, x, z) : undefined} />
+      <Player key={`${state.runSeed}:${state.scene}`} cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : state.scene === 'ECHO_GARDEN' ? [7, 11, 13] : state.scene === 'TEMPLE_BALANCE' ? [8, 11, 15] : [8, 12, 16]} reducedMotion={reducedMotion} identity={session.identity} vector={input.vector} onPosition={reportPosition} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : state.scene === 'ECHO_GARDEN' ? 7.7 : state.scene === 'TEMPLE_BALANCE' ? 8.8 : 8.25} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : state.scene === 'ECHO_GARDEN' ? [0, 3.9] : [0, 6.35]} canMove={state.scene === 'TEMPLE_BALANCE' ? (x, z) => balanceWalkable(state.balance, x, z) : undefined} cinematicSeconds={state.restoration.phase === 'playing' ? restorationSeconds : null} celebrate={state.restoration.phase === 'complete' && state.scene === 'ISLAND'} />
     </Canvas>
-    <HUD friend={session.identity.label} scene={state.scene} nearby={nearby?.label ?? null} onInteract={interact} muted={muted} onToggleMute={() => { const next = !muted; setMuted(next); audio.setMuted(next); }} shards={state.completedPortals.length} seals={seals} canReset={state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing' || state.scene === 'TEMPLE_BALANCE' && state.balance.phase !== 'claimed' && state.balance.phase !== 'shard-ready' || state.scene === 'CELESTIAL_OBSERVATORY' && state.celestial.phase !== 'claimed' && state.celestial.phase !== 'shard-ready'} onReset={reset} intro={intro} banner={banner} portalStatuses={[1, 2, 3, 4].map(portal => portalStatus(state, portal))} echo={state.echo} echoCallout={echoCallout} balance={state.balance} balanceCallout={balanceCallout} celestial={state.celestial} celestialCallout={celestialCallout} />
-    <MobileControls onMove={input.setTouch} onInteract={interact} canInteract={Boolean(nearby?.actionable)} paused={props.paused} />
+    <HUD friend={session.identity.label} scene={state.scene} nearby={nearby?.label ?? null} onInteract={interact} muted={muted} onToggleMute={() => { const next = !muted; setMuted(next); audio.setMuted(next); }} shards={state.completedPortals.length} seals={seals} canReset={state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing' || state.scene === 'TEMPLE_BALANCE' && state.balance.phase !== 'claimed' && state.balance.phase !== 'shard-ready' || state.scene === 'CELESTIAL_OBSERVATORY' && state.celestial.phase !== 'claimed' && state.celestial.phase !== 'shard-ready'} onReset={reset} intro={intro} banner={banner} portalStatuses={[1, 2, 3, 4].map(portal => portalStatus(state, portal))} echo={state.echo} echoCallout={echoCallout} balance={state.balance} balanceCallout={balanceCallout} celestial={state.celestial} celestialCallout={celestialCallout} restorationPhase={state.restoration.phase} restorationStage={state.restoration.phase === 'playing' ? restorationStage(restorationSeconds) : null} />
+    <MobileControls onMove={input.setTouch} onInteract={interact} canInteract={Boolean(nearby?.actionable)} paused={props.paused || state.restoration.phase === 'playing' || completionOpen} />
+    {completionOpen && state.restoration.phase === 'complete' && <CompletionScreen friend={session.identity.label} sigil={sigil} onExplore={() => setCompletionOpen(false)} onNewJourney={beginNewJourney} />}
     {flash && <div className="shard-flash" aria-hidden="true" />}
     <div className="portrait-hint">Rotate your device to landscape for the best view.</div>
   </main>;
