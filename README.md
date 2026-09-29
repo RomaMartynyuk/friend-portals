@@ -40,7 +40,7 @@ The Echo Runes use original geometric symbols and original procedural pentatonic
 
 ## Technology
 
-TypeScript, React 19, Three.js, React Three Fiber, and FriendSDK v0.1.2. The FriendSDK CLI uses esbuild to produce a trusted wallet host and sandboxed game; Vite is not part of this build. The island, temples, garden, observatory, avatar, beam, effects, and temporary sounds are original procedural assets. Balance uses discrete logic and animated geometry, with no rigid-body dependency. Celestial ring angles are logical time calculations that drive procedural geometry; no physics or post-processing package is used. No canonical 3D Friend model or canonical audio is claimed.
+TypeScript, React 19, Three.js, React Three Fiber, and FriendSDK v0.1.3. The FriendSDK CLI uses esbuild to produce a trusted wallet host and sandboxed game; Vite is not part of this build. The island, temples, garden, observatory, avatar, beam, effects, and temporary sounds are original procedural assets. Balance uses discrete logic and animated geometry, with no rigid-body dependency. Celestial ring angles are logical time calculations that drive procedural geometry; no physics or post-processing package is used. No canonical 3D Friend model or canonical audio is claimed.
 
 ## Rare Friends integration
 
@@ -54,7 +54,7 @@ Normal preview play requires a wallet owning a hardwired Generation 1+ Rare Frie
 
 ## Development
 
-Node.js 22+ and npm are required. The FriendSDK v0.1.2 package archive is included in `vendor/` so this repository installs independently.
+Node.js 22+ and npm are required. The FriendSDK v0.1.3 package archive is included in `vendor/` so this repository installs independently. Version 0.1.3 fixes owned Friend discovery on the default Robinhood RPC by paging account-filtered Transfer history from the canonical collection's first Transfer block.
 
 ```sh
 npm ci

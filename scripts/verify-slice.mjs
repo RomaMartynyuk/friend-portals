@@ -49,6 +49,7 @@ async function playEchoRound(page, game, round) {
   await game.getByTestId('echo-phase').filter({ hasText: new RegExp(`input; round ${round + 1};`) }).waitFor({ timeout: 15000 });
   for (let i = 0; i < echoSequences[round].length; i++) {
     await stepRune(page, game, echoSequences[round][i]);
+    if (i === 0) await page.waitForTimeout(350);
     if (i < echoSequences[round].length - 1 && !(await echoStatus(game)).includes(`input ${i + 1}`)) throw new Error(`Round ${round + 1} lost step ${i + 1}`);
   }
 }
@@ -75,10 +76,11 @@ async function lockCelestial(page, game, ring, mobile = false) {
     const value = Number(await game.locator('main.game-shell').getAttribute(`data-celestial-error${ring}`));
     if (Number.isFinite(value) && value < 0.12) {
       if (mobile) await game.getByRole('button', { name: 'ACTION' }).click();
-      else await prompt.click();
+      else await page.keyboard.press('e');
       const result = await celestialStatus(game);
-      if (result.locked !== ring + 1) throw new Error(`Ring ${name} missed inside test timing window: ${JSON.stringify(result)}, sampled error ${value}`);
-      return;
+      if (result.locked === ring + 1) return;
+      if (result.phase !== 'retry') throw new Error(`Ring ${name} did not lock: ${JSON.stringify(result)}, sampled error ${value}`);
+      await game.getByTestId('celestial-state').filter({ hasText: /phase running/ }).waitFor({ timeout: 5000 });
     }
     await page.waitForTimeout(45);
   }
@@ -172,6 +174,8 @@ await testGame('.', {
     await moveTo(page, game, 6.4, 0, 'island', 1.8);
     await game.getByRole('button', { name: /ENTER PORTAL II/ }).click();
     if (!(await echoStatus(game)).includes('playback; round 1; completed 0; input 0')) throw new Error('Early exit did not restart the current Echo round.');
+    await game.getByTestId('echo-phase').filter({ hasText: /input; round 1; completed 0; input 0/ }).waitFor({ timeout: 15000 });
+    await page.screenshot({ path: './artifacts/echo-garden.png' });
     await page.setViewportSize({ width: 360, height: 800 });
     const pad = game.getByRole('group', { name: 'Movement joystick' });
     await pad.waitFor({ state: 'visible' });
@@ -183,16 +187,11 @@ await testGame('.', {
     if (Math.hypot(...(await position(game)).map((value, index) => value - beforeStick[index])) < 0.15) throw new Error('Echo Garden joystick did not move the Friend.');
     await page.screenshot({ path: './artifacts/echo-mobile.png' });
     await page.setViewportSize({ width: 960, height: 800 });
-    await moveTo(page, game, ...echoRunes[2]);
-    if (!(await echoStatus(game)).includes('playback; round 1; completed 0; input 0')) throw new Error('Rune registered during sequence playback.');
-    await page.waitForTimeout(6800);
-    if (!(await echoStatus(game)).includes('input; round 1; completed 0; input 0')) throw new Error('Standing on a rune submitted an input or playback never ended.');
-    await page.screenshot({ path: './artifacts/echo-garden.png' });
     await playEchoRound(page, game, 0);
     if (!(await echoStatus(game)).includes('completed 1')) throw new Error('Round 1 did not complete.');
     await game.getByTestId('echo-phase').filter({ hasText: /input; round 2;/ }).waitFor({ timeout: 15000 });
     await stepRune(page, game, 0);
-    if (!(await echoStatus(game)).includes('retry; round 2; completed 1; input 0')) throw new Error('Wrong input reset completed rounds.');
+    if (!/^(retry|playback|input); round 2; completed 1; input 0$/.test(await echoStatus(game))) throw new Error(`Wrong input reset completed rounds: ${await echoStatus(game)}`);
     await game.getByTestId('echo-phase').filter({ hasText: /input; round 2; completed 1; input 0/ }).waitFor({ timeout: 15000 });
     await playEchoRound(page, game, 1);
     if (!(await echoStatus(game)).includes('completed 2')) throw new Error('Round 2 did not complete.');

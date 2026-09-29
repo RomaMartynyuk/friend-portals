@@ -71,6 +71,9 @@ assert.deepEqual(journey.light.orientations, game.lightVariants[0].initial);
 assert.equal(journey.runSeed, seedA);
 
 const echoState = game.initialEchoPuzzle(seedA);
+const playbackAttempt = game.submitEchoRune({ ...echoState, phase: 'playback' }, 2);
+assert.equal(playbackAttempt.verdict, 'ignored');
+assert.equal(playbackAttempt.next.inputIndex, 0);
 const inputState = game.allowEchoInput({ ...echoState, phase: 'playback' });
 const wrong = game.submitEchoRune(inputState, 2);
 assert.equal(wrong.verdict, 'wrong');
