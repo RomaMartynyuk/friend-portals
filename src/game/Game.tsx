@@ -1,7 +1,9 @@
 import { Canvas } from '@react-three/fiber';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameComponentProps } from '@rarefriends/friendsdk/runtime';
+import type { GenerationSprites } from '@rarefriends/friendsdk/sprites';
 import { gameSession } from '../sdk/friendSdkAdapter';
+import { loadCanonicalFriend } from '../sdk/friendSpriteAdapter';
 import { activateRestoration, completeRestoration, startNewJourney, claimShard, claimEchoShard, claimBalanceShard, claimCelestialShard, enterEchoRune, startEchoInput, replayEchoRound, nextEchoRound, materializeEchoShard, materializeBalanceShard, moveBalanceBlock, resetBalance, resetCelestial, settleBalance, enterPortal, finishIslandEvent, gameProgress, portalStatus, resetPuzzle, restoreGameState, returnToIsland, revealShard, revealCelestialShard, rotateCrystal, saveCelestialState, type GameState } from './GameState';
 import { sessionProgressStore } from './ProgressStore';
 import { crystalPositions, traceLight, type CrystalId } from '../portals/light/LightPuzzleState';
@@ -40,6 +42,10 @@ export default function Game(props: GameComponentProps) {
   const nearRef = useRef<Nearby | null>(null);
   const playerPosition = useRef<[number, number]>([0, 2.5]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [sprites, setSprites] = useState<GenerationSprites | null>(null);
+  const [artworkRetry, setArtworkRetry] = useState(0);
+  const [friendReaction, setFriendReaction] = useState(0);
+  const [friendDeparting, setFriendDeparting] = useState(false);
   const [error, setError] = useState('');
   const [muted, setMuted] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -91,6 +97,8 @@ export default function Game(props: GameComponentProps) {
   const rotating = useRef(false);
   const claimingLock = useRef(false);
   const transitionLock = useRef(false);
+  const departurePending = useRef(false);
+  const departureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rotationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const claimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audio = useMemo(() => new AudioManager(), []);
@@ -151,24 +159,34 @@ export default function Game(props: GameComponentProps) {
     }
   }, [state.scene, state.light.phase, state.balance.phase, state.celestial, state.runSeed, props.paused, updateState, audio]);
   const interact = useCallback(() => {
+    audio.unlock();
     const near = nearRef.current;
-    if (!near?.actionable || props.paused || status !== 'ready' || transitionLock.current || completionOpen) return;
+    if (!near?.actionable || props.paused || status !== 'ready' || transitionLock.current || departurePending.current || completionOpen) return;
     if (near.type === 'monument') {
       if (finaleInteractionLock.current || state.restoration.phase !== 'dormant' || state.completedPortals.length !== 4) return;
       finaleInteractionLock.current = true;
       nearRef.current = null; setNearby(null);
-      audio.play('finale-awaken');
+      audio.play('finale-awaken'); audio.playFriend('anticipation', 0.35);
       updateState(previous => activateRestoration(previous, Date.now()));
     } else if (near.type === 'monument-review') {
       if (state.restoration.phase === 'complete') setCompletionOpen(true);
     } else if (near.type === 'portal') {
-      transitionLock.current = true; audio.play('interaction'); updateState(previous => enterPortal(previous, near.id));
-      setTimeout(() => { transitionLock.current = false; }, 350);
+      departurePending.current = true; setFriendDeparting(true);
+      audio.play('interaction'); audio.playFriend('action-start', 0.4);
+      departureTimer.current = setTimeout(() => {
+        departurePending.current = false; transitionLock.current = true;
+        updateState(previous => enterPortal(previous, near.id)); setFriendDeparting(false);
+        setTimeout(() => { transitionLock.current = false; }, 350);
+      }, reducedMotion ? 0 : 135);
     } else if (near.type === 'exit') {
-      audio.play('interaction'); exitRoom();
+      departurePending.current = true; setFriendDeparting(true);
+      audio.play('interaction'); audio.playFriend('action-start', 0.32);
+      departureTimer.current = setTimeout(() => {
+        departurePending.current = false; exitRoom(); setFriendDeparting(false);
+      }, reducedMotion ? 0 : 135);
     } else if (near.type === 'crystal') {
       if (rotating.current || state.light.phase !== 'routing') return;
-      rotating.current = true; setBeamBroken(true); audio.play('crystal-rotate');
+      rotating.current = true; setBeamBroken(true); audio.play('crystal-rotate'); audio.playFriend('select', 0.28);
       updateState(previous => rotateCrystal(previous, near.id as CrystalId));
       rotationTimer.current = setTimeout(() => { rotating.current = false; setBeamBroken(false); audio.play('beam-connect'); }, reducedMotion ? 100 : 310);
     } else if (near.type === 'balance-block') {
@@ -217,40 +235,53 @@ export default function Game(props: GameComponentProps) {
       claimTimer.current = setTimeout(() => {
         updateState(claimCelestialShard); celestialMotion.current = { base: { ...celestialMotion.current.base, phase: 'claimed' }, at: performance.now() };
         nearRef.current = null; setNearby(null); setCelestialClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 220); setBanner('FINAL PORTAL SHARD ACQUIRED');
-        setTimeout(() => setBanner(null), 2500);
+        setTimeout(() => setBanner(null), 2500); setFriendReaction(value => value + 1); audio.playFriend('reward', 0.55);
       }, reducedMotion ? 120 : 820);
     } else if (near.type === 'balance-shard') {
       if (balanceClaimingLock.current || state.balance.phase !== 'shard-ready') return;
       balanceClaimingLock.current = true; setBalanceClaiming(true); audio.play('balance-shard-claim');
       claimTimer.current = setTimeout(() => {
         updateState(claimBalanceShard); nearRef.current = null; setNearby(null); setBalanceClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD III ACQUIRED');
-        setTimeout(() => setBanner(null), 2100);
+        setTimeout(() => setBanner(null), 2100); setFriendReaction(value => value + 1); audio.playFriend('reward', 0.5);
       }, reducedMotion ? 120 : 700);
     } else if (near.type === 'echo-shard') {
       if (echoClaimingLock.current || state.echo.phase !== 'shard-ready') return;
       echoClaimingLock.current = true; setEchoClaiming(true); audio.play('echo-shard-claim');
       claimTimer.current = setTimeout(() => {
         updateState(claimEchoShard); nearRef.current = null; setNearby(null); setEchoClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD II ACQUIRED');
-        setTimeout(() => setBanner(null), 2100);
+        setTimeout(() => setBanner(null), 2100); setFriendReaction(value => value + 1); audio.playFriend('reward', 0.5);
       }, reducedMotion ? 120 : 700);
     } else if (near.type === 'shard') {
       if (claimingLock.current || state.light.phase !== 'shard-ready') return;
       claimingLock.current = true; setClaiming(true); audio.play('shard-claim');
       claimTimer.current = setTimeout(() => {
         updateState(claimShard); nearRef.current = null; setNearby(null); setClaiming(false); setFlash(true); setTimeout(() => setFlash(false), 180); setBanner('PORTAL SHARD I ACQUIRED');
-        setTimeout(() => setBanner(null), 2100);
+        setTimeout(() => setBanner(null), 2100); setFriendReaction(value => value + 1); audio.playFriend('reward', 0.5);
       }, reducedMotion ? 120 : 700);
     }
   }, [props.paused, status, completionOpen, state.restoration.phase, state.completedPortals.length, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, reducedMotion, audio, updateState, exitRoom, liveCelestial, setCelestialSnapshot]);
   const input = useMovementInput(props.paused || status !== 'ready' || state.restoration.phase === 'playing' || completionOpen, interact);
-  useEffect(() => { let active = true; setStatus('loading'); void props.client.read().then(snapshot => {
+  useEffect(() => { let active = true; setStatus('loading'); setSprites(null); void props.client.read().then(async snapshot => {
     if (!active) return;
     if (snapshot.friendId !== props.friendId) throw new Error('Selected Friend changed. Please re-enter the game.');
+    const artwork = await loadCanonicalFriend(props.friendId);
+    if (!active) return;
+    setSprites(artwork);
     setState(restoreGameState(sessionProgressStore.read(props.friendId, fixedRunSeed)));
     setStatus('ready');
   }).catch(cause => { if (active) { setError(cause instanceof Error ? cause.message : 'Unable to open the game.'); setStatus('error'); } });
-  return () => { active = false; }; }, [props.client, props.friendId]);
-  useEffect(() => () => { audio.dispose(); if (rotationTimer.current) clearTimeout(rotationTimer.current); if (claimTimer.current) clearTimeout(claimTimer.current); if (balancePushTimer.current) clearTimeout(balancePushTimer.current); if (celestialPerfectTimer.current) clearTimeout(celestialPerfectTimer.current); for (const timer of echoEffectTimers.current) clearTimeout(timer); }, [audio]);
+  return () => { active = false; }; }, [props.client, props.friendId, artworkRetry]);
+  useEffect(() => {
+    const unlock = () => audio.unlock();
+    window.addEventListener('keydown', unlock);
+    return () => window.removeEventListener('keydown', unlock);
+  }, [audio]);
+  useEffect(() => () => { audio.dispose(); if (departureTimer.current) clearTimeout(departureTimer.current); if (rotationTimer.current) clearTimeout(rotationTimer.current); if (claimTimer.current) clearTimeout(claimTimer.current); if (balancePushTimer.current) clearTimeout(balancePushTimer.current); if (celestialPerfectTimer.current) clearTimeout(celestialPerfectTimer.current); for (const timer of echoEffectTimers.current) clearTimeout(timer); }, [audio]);
+  const previousFriendScene = useRef(state.scene);
+  useEffect(() => {
+    if (previousFriendScene.current !== state.scene) audio.playFriend('action-ready', 0.26);
+    previousFriendScene.current = state.scene;
+  }, [state.scene, audio]);
   useEffect(() => {
     const current = celestialMotion.current;
     celestialMotion.current = { base: props.paused ? advanceCelestial(current.base, celestialConfig, (performance.now() - current.at) / 1000) : current.base, at: performance.now() };
@@ -500,15 +531,15 @@ export default function Game(props: GameComponentProps) {
     }
     if (!sameNearby(nearRef.current, next)) { nearRef.current = next; setNearby(next); }
   }, [state.scene, state.restoration.phase, state.light.phase, state.echo.phase, state.balance, state.celestial.phase, state.celestial.lockedCount, state.completedPortals, onEchoRuneEntry, audio]);
-  if (status !== 'ready') return <div className="startup" role={status === 'error' ? 'alert' : 'status'}><strong>FRIEND PORTALS</strong><p>{status === 'error' ? error : 'Opening the island…'}</p>{status === 'error' && <button onClick={() => { setStatus('loading'); void props.client.read().then(() => setStatus('ready')).catch(cause => { setError(String(cause)); setStatus('error'); }); }}>RETRY</button>}</div>;
-  return <main ref={gameShell} className="game-shell" aria-label="Friend Portals game" data-run-seed={state.runSeed} data-light-variant={state.light.variant} data-balance-layout={state.balance.layout} data-celestial-constellation={state.celestial.constellation} data-sigil-id={sigil.id} data-restoration={state.restoration.phase}>
+  if (status !== 'ready' || !sprites || sprites.tokenId !== props.friendId) return <div className="startup" role={status === 'error' ? 'alert' : 'status'}><strong>FRIEND PORTALS</strong><p>{status === 'error' ? `Canonical Friend unavailable: ${error}` : 'SUMMONING FRIEND...'}</p>{status === 'error' && <button onClick={() => { setStatus('loading'); setArtworkRetry(value => value + 1); }}>RETRY</button>}</div>;
+  return <main ref={gameShell} onPointerDownCapture={() => audio.unlock()} className="game-shell" aria-label="Friend Portals game" data-friend-token={sprites.tokenId.toString()} data-friend-family={sprites.familyName} data-friend-artwork="canonical" data-run-seed={state.runSeed} data-light-variant={state.light.variant} data-balance-layout={state.balance.layout} data-celestial-constellation={state.celestial.constellation} data-sigil-id={sigil.id} data-restoration={state.restoration.phase}>
     <Canvas shadows dpr={[1, 1.5]} camera={{ fov: 42, near: 0.1, far: 90, position: [10, 14, 18] }} gl={{ antialias: true, powerPreference: 'high-performance' }}>
       {state.scene === 'ISLAND' ? <Island state={state} identitySeed={Number(props.friendId % 1000n)} reducedMotion={reducedMotion} unlockProgress={unlockProgress} restorationSeconds={restorationSeconds} sigil={sigil} />
         : state.scene === 'TEMPLE_LIGHT' ? <LightTemple light={state.light} highlightedCrystal={nearby?.type === 'crystal' ? nearby.id : null} resetVersion={resetVersion} beamBroken={beamBroken} chargeStep={chargeStep} claiming={claiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
         : state.scene === 'ECHO_GARDEN' ? <EchoGarden echo={state.echo} activeRune={echoActiveRune} wrongRune={echoWrongRune} pulseAll={echoPulseAll} claiming={echoClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
           : state.scene === 'TEMPLE_BALANCE' ? <BalanceTemple balance={state.balance} nearbyBlock={nearby?.type === 'balance-block' ? nearby.id : null} resistedBlock={balanceResistedBlock} resetVersion={balanceResetVersion} chargeStep={balanceChargeStep} claiming={balanceClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} />
             : <CelestialObservatory state={state.celestial} config={celestialConfig} liveState={liveCelestial} finalStep={celestialFinalStep} missedRing={celestialMissedRing} perfectRing={celestialPerfectRing} claiming={celestialClaiming} playerPosition={playerPosition} reducedMotion={reducedMotion} onSymbolPass={onCelestialSymbolPass} />}
-      <Player key={`${state.runSeed}:${state.scene}`} cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : state.scene === 'ECHO_GARDEN' ? [7, 11, 13] : state.scene === 'TEMPLE_BALANCE' ? [8, 11, 15] : [8, 12, 16]} reducedMotion={reducedMotion} identity={session.identity} vector={input.vector} onPosition={reportPosition} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : state.scene === 'ECHO_GARDEN' ? 7.7 : state.scene === 'TEMPLE_BALANCE' ? 8.8 : 8.25} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : state.scene === 'ECHO_GARDEN' ? [0, 3.9] : [0, 6.35]} canMove={state.scene === 'TEMPLE_BALANCE' ? (x, z) => balanceWalkable(state.balance, x, z) : undefined} cinematicSeconds={state.restoration.phase === 'playing' ? restorationSeconds : null} celebrate={state.restoration.phase === 'complete' && state.scene === 'ISLAND'} />
+      <Player key={`${state.runSeed}:${state.scene}`} cameraOffset={state.scene === 'ISLAND' ? [10, 14, 18] : state.scene === 'TEMPLE_LIGHT' ? [7.5, 10, 13] : state.scene === 'ECHO_GARDEN' ? [7, 11, 13] : state.scene === 'TEMPLE_BALANCE' ? [8, 11, 15] : [8, 12, 16]} reducedMotion={reducedMotion} sprites={sprites} reaction={friendReaction} departing={friendDeparting} vector={input.vector} onPosition={reportPosition} onStep={() => audio.play('footstep')} bounds={state.scene === 'ISLAND' ? 9.45 : state.scene === 'TEMPLE_LIGHT' ? 6.3 : state.scene === 'ECHO_GARDEN' ? 7.7 : state.scene === 'TEMPLE_BALANCE' ? 8.8 : 8.25} spawn={state.scene === 'ISLAND' ? [0, -3.9] : state.scene === 'TEMPLE_LIGHT' ? [0, 2.5] : state.scene === 'ECHO_GARDEN' ? [0, 3.9] : [0, 6.35]} canMove={state.scene === 'TEMPLE_BALANCE' ? (x, z) => balanceWalkable(state.balance, x, z) : undefined} cinematicSeconds={state.restoration.phase === 'playing' ? restorationSeconds : null} celebrate={state.restoration.phase === 'complete' && state.scene === 'ISLAND'} />
     </Canvas>
     <HUD friend={session.identity.label} scene={state.scene} nearby={nearby?.label ?? null} onInteract={interact} muted={muted} onToggleMute={() => { const next = !muted; setMuted(next); audio.setMuted(next); }} shards={state.completedPortals.length} seals={seals} canReset={state.scene === 'TEMPLE_LIGHT' && state.light.phase === 'routing' || state.scene === 'TEMPLE_BALANCE' && state.balance.phase !== 'claimed' && state.balance.phase !== 'shard-ready' || state.scene === 'CELESTIAL_OBSERVATORY' && state.celestial.phase !== 'claimed' && state.celestial.phase !== 'shard-ready'} onReset={reset} intro={intro} banner={banner} portalStatuses={[1, 2, 3, 4].map(portal => portalStatus(state, portal))} echo={state.echo} echoCallout={echoCallout} balance={state.balance} balanceCallout={balanceCallout} celestial={state.celestial} celestialCallout={celestialCallout} restorationPhase={state.restoration.phase} restorationStage={state.restoration.phase === 'playing' ? restorationStage(restorationSeconds) : null} />
     <MobileControls onMove={input.setTouch} onInteract={interact} canInteract={Boolean(nearby?.actionable)} paused={props.paused || state.restoration.phase === 'playing' || completionOpen} />

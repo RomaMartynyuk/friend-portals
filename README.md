@@ -6,7 +6,9 @@ An independent 3D Rare Friends Vibeathon adventure on a floating island. This re
 
 Explore a mysterious 3D island and solve four different portal puzzles. The intended journey is Island → Portal → Puzzle → Shard → Next Portal → Final activation.
 
-## Current phase: The Restoration
+## Current phase: Canonical Friend integration
+
+The playable character is the wallet-selected Rare Friend. FriendSDK's trusted host selects an eligible owned Friend and passes its token ID to the game. The game reads that Friend's canonical 16×16 generation frames from the public sprite API, then displays them as a crisp camera-facing plane in the Three.js world. Idle and walk animation use the SDK frames at 4.5 and 9 FPS. World movement chooses the artwork direction; Colossus vertical movement uses the SDK's last-horizontal fallback. A one-pixel white silhouette outline follows every frame. Small original family-colored motes, footsteps, portal arrival/departure effects, and a shard reaction decorate the Friend without changing canonical pixels or gameplay collision.
 
 Phase 2 completes Portal I. Walk through its gold portal into a compact floating temple. A light emitter feeds three rotatable crystals. Route the beam through all three engraved seals to charge the Portal Core, then approach and claim Portal Shard I. Walk into the temple's exit arch to return to the island. Portal I gains a completed rune and light; energy crosses the central monument and awakens Portal II. The HUD advances to **1 / 4 shards**.
 
@@ -30,7 +32,7 @@ Puzzle configurations and `runSeed` stay in centralized session progress, so res
 
 - **Desktop:** WASD or arrow keys move relative to the camera. **E** or Space interacts nearby, including the ready monument. **R** resets an unsolved Light Temple, Balance Temple, or Celestial Observatory. Echo Runes activate automatically when stepped onto.
 - **Mobile:** Drag the left joystick to move and step onto Echo Runes; tap **ACTION** near a crystal, Balance block, Celestial control, shard, portal, or ready monument. Use the on-screen puzzle reset button. Landscape gives the clearest view.
-- **Sound:** The SOUND button toggles original temporary procedural cues. The game stops movement and interactions while the SDK menu is open. Reduced-motion preferences remove ambient motion and shorten transition effects.
+- **Sound:** The SOUND button toggles the existing original procedural cues and a few canonical FriendSDK cues for select, portal action, shard reward, and monument anticipation. SDK audio unlocks from a keyboard or pointer gesture; no cue is queued before unlock. The game stops movement and interactions while the SDK menu is open. Reduced-motion preferences remove ambient motion and shorten transition effects.
 
 Each room's return arch is usable before solving. Leaving Echo Garden before completion restarts the current round's demonstration on re-entry while preserving completed rounds. Completed portals can be revisited; claimed shards cannot be claimed again.
 
@@ -42,11 +44,11 @@ The Echo Runes use original geometric symbols and original procedural pentatonic
 
 ## Technology
 
-TypeScript, React 19, Three.js, React Three Fiber, and FriendSDK v0.1.3. The FriendSDK CLI uses esbuild to produce a trusted wallet host and sandboxed game; Vite is not part of this build. The island, temples, garden, observatory, avatar, beam, effects, and temporary sounds are original procedural assets. Balance uses discrete logic and animated geometry, with no rigid-body dependency. Celestial ring angles are logical time calculations that drive procedural geometry; no physics or post-processing package is used. No canonical 3D Friend model or canonical audio is claimed.
+TypeScript, React 19, Three.js, React Three Fiber, and FriendSDK v0.1.3. The FriendSDK CLI uses esbuild to produce a trusted wallet host and sandboxed game; Vite is not part of this build. The island, temples, garden, observatory, environmental effects, and most game sounds are original procedural assets. The Friend artwork and selected short sound cues come from public FriendSDK APIs. Balance uses discrete logic and animated geometry, with no rigid-body dependency. Celestial ring angles are logical time calculations that drive procedural geometry; no physics or post-processing package is used. No canonical 3D Friend model is claimed.
 
 ## Rare Friends integration
 
-FriendSDK's trusted host connects the wallet, discovers eligible owned Generations NFTs, verifies ownership on Robinhood mainnet (chain 4663), and passes the selected `friendId` into the sandbox. The ID appears in the HUD and deterministically changes the avatar accent and island prop arrangement. The game calls the supplied client `read()` to initialize its session. There are no purchases, NFT rewards, token claims, or blockchain writes. The SDK currently requires an otherwise unused `game.json` chance-game definition; its fields are not mechanics in Friend Portals. Canonical 2D sprite integration is reserved for a later phase.
+FriendSDK's trusted host connects the wallet, discovers eligible owned Generations NFTs, verifies ownership on Robinhood mainnet (chain 4663), and passes the selected `friendId` into the sandbox. The game verifies the supplied session with `client.read()`, then loads the selected token's canonical generation sprite through the public `@rarefriends/friendsdk/sprites` export. The ID appears in the HUD; the SDK family determines a restrained cosmetic particle color. The same token remains selected across rooms and New Journey. If canonical artwork cannot load, the game presents a retryable error instead of a substitute avatar. There are no purchases, NFT rewards, token claims, or blockchain writes. The SDK currently requires an otherwise unused `game.json` chance-game definition; its fields are not mechanics in Friend Portals.
 
 Normal preview play requires a wallet owning a hardwired Generation 1+ Rare Friend on Robinhood mainnet. The automated SDK browser harness uses mock ownership only for tests.
 
@@ -75,11 +77,12 @@ npm run test:seed
 npm run test:balance
 npm run test:celestial
 npm run test:finale
+npm run test:friend
 npm run test:browser
 npm run test:slice
 ```
 
-Install Playwright Chromium first if needed: `npx playwright install chromium`. `test:seed` verifies every Light variant, fixed-seed reproducibility, Echo sequence rules, world variation, reset/re-entry, and the New Journey reset. `test:balance` searches legal grid pushes to verify all six Balance layouts and checks collision, reset, re-entry, duplicate claims, and Portal IV progression. `test:celestial` verifies all eight clues, deterministic motion, angular tolerance and wrapping, retries, reset, re-entry, and duplicate-claim protection. `test:finale` verifies stage timing, sigil snapshots, named-seed isolation, duplicate activation, and New Journey. `test:slice` drives all four portals and the monument restoration with a fixed seed in the SDK's mock-wallet browser harness, including mobile interaction, Explore, confirmation, and New Journey reset. Generated output is `.friendsdk/`; browser screenshots are saved under `artifacts/`. Both are untracked.
+Install Playwright Chromium first if needed: `npx playwright install chromium`. `test:seed` verifies every Light variant, fixed-seed reproducibility, Echo sequence rules, world variation, reset/re-entry, and the New Journey reset. `test:balance` searches legal grid pushes to verify all six Balance layouts and checks collision, reset, re-entry, duplicate claims, and Portal IV progression. `test:celestial` verifies all eight clues, deterministic motion, angular tolerance and wrapping, retries, reset, re-entry, and duplicate-claim protection. `test:finale` verifies stage timing, sigil snapshots, named-seed isolation, duplicate activation, and New Journey. `test:friend` checks all canonical frame directions, Colossus fallback, family identity, and pixel outlines across all 64 frames. `test:slice` drives all four portals and the monument restoration with a fixed seed in the SDK's mock-wallet browser harness, verifies the same canonical Friend across scenes, and covers Explore, confirmation, and New Journey reset. Generated output is `.friendsdk/`; browser screenshots are saved under `artifacts/`. Both are untracked.
 
 ## Deployment
 
@@ -91,4 +94,4 @@ Friend Portals is a separate Rare Friends Vibeathon game and will use its own so
 
 ## Known limits
 
-Real-wallet play and physical-device FPS remain unmeasured. Simulated phone-width layout and controls are tested, but real device performance still needs profiling. Canonical Friend artwork presentation and durable save support remain future work. The game is not yet production-ready or deployed.
+Real-wallet play and physical-device FPS remain unmeasured. Simulated phone-width layout and controls are tested, but real device performance still needs profiling. Durable save support remains future work. The game is not yet production-ready or deployed.

@@ -1,6 +1,12 @@
 import { testGame } from '@rarefriends/friendsdk/testing';
 import { solveLayout } from './verify-balance.mjs';
 const sliceSeed = 'SLICE_0379';
+async function assertCanonicalFriend(game) {
+  const shell = game.locator('main.game-shell');
+  if (await shell.getAttribute('data-friend-token') !== '7730') throw new Error('SDK-selected Friend changed or disappeared.');
+  if (await shell.getAttribute('data-friend-artwork') !== 'canonical') throw new Error('Canonical Friend sprite is not active.');
+  if (!(await shell.getAttribute('data-friend-family'))) throw new Error('Canonical Friend family is missing.');
+}
 async function setRunSeed(page, game) {
   await page.locator('iframe').evaluate((frame, seed) => { frame.src = `./game.html?runSeed=${encodeURIComponent(seed)}`; }, sliceSeed);
   await game.locator(`main.game-shell[data-run-seed="${sliceSeed}"]`).waitFor();
@@ -110,11 +116,13 @@ await testGame('.', {
   screenshot: './artifacts/island-complete.png',
   check: async ({ page, game }) => {
     await setRunSeed(page, game);
+    await assertCanonicalFriend(game);
     await game.getByText('THE FLOATING ISLE').waitFor();
     await game.locator('canvas').click({ position: { x: 300, y: 250 } });
     await moveUntil(page, game.getByRole('button', { name: /ENTER PORTAL I/ }), ['w'], 7);
     await game.getByRole('button', { name: /ENTER PORTAL I/ }).click();
     await game.locator('.scene-title').getByText('TEMPLE OF LIGHT').waitFor();
+    await assertCanonicalFriend(game);
     await page.waitForTimeout(400);
     await page.screenshot({ path: './artifacts/temple-unsolved.png' });
     await moveUntil(page, game.getByRole('button', { name: /ROTATE CRYSTAL A/ }), ['w'], 12);
@@ -167,6 +175,7 @@ await testGame('.', {
     await game.getByRole('button', { name: /ENTER PORTAL II/ }).waitFor();
     await game.getByRole('button', { name: /ENTER PORTAL II/ }).click();
     await game.locator('.scene-title').getByText('ECHO GARDEN').waitFor();
+    await assertCanonicalFriend(game);
     await moveTo(page, game, 0, 6.25);
     await game.getByRole('button', { name: /LEAVE GARDEN/ }).click();
     await game.getByText('THE FLOATING ISLE').waitFor();
@@ -225,6 +234,7 @@ await testGame('.', {
     await game.getByRole('button', { name: /ENTER PORTAL III/ }).waitFor();
     await game.getByRole('button', { name: /ENTER PORTAL III/ }).click();
     await game.locator('.scene-title').getByText('TEMPLE OF BALANCE').waitFor();
+    await assertCanonicalFriend(game);
     if ((await balanceStatus(game)).layout !== 0) throw new Error('Fixed seed did not select Balance layout 0.');
     await page.screenshot({ path: './artifacts/balance-unsolved.png' });
     await page.setViewportSize({ width: 360, height: 800 });
@@ -299,6 +309,7 @@ await testGame('.', {
     await moveTo(page, game, -6.4, 0, 'island', 1.8);
     await game.getByRole('button', { name: /ENTER PORTAL IV/ }).click();
     await game.locator('.scene-title').getByText('CELESTIAL OBSERVATORY').waitFor();
+    await assertCanonicalFriend(game);
     if ((await celestialStatus(game)).constellation !== 4) throw new Error('Fixed seed did not select The Voyager.');
     await page.waitForTimeout(2050);
     await page.screenshot({ path: './artifacts/celestial-observatory.png' });
@@ -394,6 +405,7 @@ await testGame('.', {
     await page.setViewportSize({ width: 960, height: 800 });
     await page.waitForTimeout(500);
     await page.screenshot({ path: './artifacts/restored-island-desktop.png' });
+    await assertCanonicalFriend(game);
     await page.setViewportSize({ width: 360, height: 800 });
     const restoredPosition = await position(game);
     const joystick = game.getByRole('group', { name: 'Movement joystick' });
@@ -416,6 +428,7 @@ await testGame('.', {
     if ((await game.locator('main.game-shell').getAttribute('data-light-variant')) === oldLight) throw new Error('New Journey reused the Light solution.');
     if ((await game.locator('main.game-shell').getAttribute('data-sigil-id')) === oldSigil) throw new Error('New Journey reused the sigil.');
     if ((await game.locator('main.game-shell').getAttribute('data-restoration')) !== 'dormant') throw new Error('New Journey retained restored state.');
+    await assertCanonicalFriend(game);
     if (!(await game.getByTestId('shard-count').textContent())?.includes('SHARDS 0 / 4')) throw new Error('New Journey kept shards.');
     if ((await game.getByTestId('portal-status').textContent()) !== 'Portal 1 active. Portal 2 locked. Portal 3 locked. Portal 4 locked') throw new Error('New Journey portal states are wrong.');
     await page.screenshot({ path: './artifacts/new-journey-mobile.png' });

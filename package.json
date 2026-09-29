@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test:browser": "friendsdk test . --screenshot ./artifacts/vertical-slice.png",
     "test:slice": "node scripts/verify-slice.mjs",
-    "test:finale": "node scripts/verify-finale.mjs"
+    "test:finale": "node scripts/verify-finale.mjs",
+    "test:friend": "node scripts/verify-friend.mjs"
   },
   "dependencies": {
     "@rarefriends/friendsdk": "file:vendor/rarefriends-friendsdk-0.1.3.tgz",

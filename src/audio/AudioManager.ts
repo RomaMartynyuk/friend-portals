@@ -1,4 +1,5 @@
 import { echoRunes, type RuneId } from '../portals/echo/echoConfig';
+import { createFriendSoundKit, type FriendSoundCue } from '@rarefriends/friendsdk/sounds';
 export type SoundCue = 'footstep' | 'portal-ambience' | 'portal-unlock' | 'interaction' | 'puzzle-success' | 'puzzle-failure' | 'shard-acquire' | 'final-completion' | 'crystal-rotate' | 'beam-connect' | 'seal-activate' | 'shard-materialize' | 'shard-claim' | 'echo-sequence-start' | 'echo-wrong' | 'echo-round-complete' | 'echo-complete' | 'echo-shard-materialize' | 'echo-shard-claim' | 'echo-portal-unlock' | 'balance-slide' | 'balance-blocked' | 'balance-under' | 'balance-over' | 'balance-plate' | 'balance-chain' | 'balance-bridge' | 'balance-complete' | 'balance-shard-materialize' | 'balance-shard-claim' | 'balance-portal-unlock' | 'celestial-ambience' | 'celestial-ring' | 'celestial-tick' | 'celestial-control' | 'celestial-lock' | 'celestial-perfect' | 'celestial-miss' | 'celestial-formation' | 'celestial-star' | 'celestial-shard-materialize' | 'celestial-shard-claim' | 'finale-awaken' | 'finale-light' | 'finale-echo' | 'finale-balance' | 'finale-celestial' | 'finale-sockets' | 'finale-transform' | 'finale-sigil';
 const tones: Record<SoundCue, readonly [number, number, number]> = {
   footstep: [135, 105, 0.08], 'portal-ambience': [180, 220, 0.45], 'portal-unlock': [390, 780, 0.55],
@@ -22,16 +23,25 @@ const tones: Record<SoundCue, readonly [number, number, number]> = {
   'finale-balance': [145, 340, 0.62], 'finale-celestial': [360, 860, 0.85], 'finale-sockets': [490, 760, 0.48],
   'finale-transform': [250, 650, 1.1], 'finale-sigil': [620, 1140, 1.25],
 };
-/** Original temporary procedural cues. No SDK sound is claimed or used. */
+/** Original temporary procedural cues, supplemented by a few canonical SDK cues. */
 export class AudioManager {
   private context: AudioContext | null = null;
+  private friendSounds = createFriendSoundKit({ volume: 0.52 });
+  private unlockPending = false;
   private muted = false;
   private echoVoices = new Set<OscillatorNode>();
   private balanceVoices = new Set<OscillatorNode>();
   private celestialVoices = new Set<OscillatorNode>();
   private finaleVoices = new Set<OscillatorNode>();
-  setMuted(value: boolean) { this.muted = value; if (value) { this.stopEcho(); this.stopBalance(); this.stopCelestial(); this.stopFinale(); } }
+  setMuted(value: boolean) { this.muted = value; this.friendSounds.setMuted(value); if (value) { this.stopEcho(); this.stopBalance(); this.stopCelestial(); this.stopFinale(); } }
   isMuted() { return this.muted; }
+  /** Must be invoked synchronously from a real keyboard/pointer gesture. */
+  unlock() {
+    if (this.unlockPending || this.friendSounds.state.status === 'ready') return;
+    this.unlockPending = true;
+    void this.friendSounds.unlock().catch(() => false).finally(() => { this.unlockPending = false; });
+  }
+  playFriend(cue: FriendSoundCue, volume = 0.48) { this.friendSounds.play(cue, { volume }); }
   private getContext() {
     if (this.muted || !('AudioContext' in window)) return null;
     this.context ??= new AudioContext();
@@ -50,7 +60,7 @@ export class AudioManager {
     sound.frequency.setValueAtTime(start, now);
     sound.frequency.exponentialRampToValueAtTime(end, now + duration);
     gain.gain.setValueAtTime(0.001, now);
-    gain.gain.exponentialRampToValueAtTime(0.042, now + 0.025);
+    gain.gain.exponentialRampToValueAtTime(cue === 'footstep' ? 0.012 : 0.042, now + 0.025);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
     sound.connect(gain).connect(context.destination);
     if (cue.startsWith('echo-')) this.trackEcho(sound);
@@ -80,5 +90,5 @@ export class AudioManager {
   stopCelestial() { for (const voice of this.celestialVoices) { try { voice.stop(); } catch { /* Already ended. */ } } this.celestialVoices.clear(); }
   stopFinale() { for (const voice of this.finaleVoices) { try { voice.stop(); } catch { /* Already ended. */ } } this.finaleVoices.clear(); }
   celestialVoiceCount() { return this.celestialVoices.size; }
-  dispose() { this.stopEcho(); this.stopBalance(); this.stopCelestial(); this.stopFinale(); void this.context?.close(); this.context = null; }
+  dispose() { this.stopEcho(); this.stopBalance(); this.stopCelestial(); this.stopFinale(); this.friendSounds.dispose(); void this.context?.close(); this.context = null; }
 }

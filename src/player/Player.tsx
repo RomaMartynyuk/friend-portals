@@ -2,21 +2,25 @@ import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { MathUtils, Vector3, type Group } from 'three';
 import { FriendAvatar } from './FriendAvatar';
-import type { FriendIdentity } from '../sdk/friendIdentity';
+import type { GenerationSprites, SpriteFacing } from '@rarefriends/friendsdk/sprites';
 import type { InputVector } from '../input/useMovementInput';
-export function Player({ identity, vector, onPosition, bounds, spawn, reducedMotion, cameraOffset, canMove, cinematicSeconds, celebrate }: {
-  identity: FriendIdentity; vector: () => InputVector; onPosition: (x: number, z: number) => void;
+export function Player({ sprites, vector, onPosition, onStep, bounds, spawn, reducedMotion, cameraOffset, canMove, cinematicSeconds, celebrate, reaction, departing }: {
+  sprites: GenerationSprites; vector: () => InputVector; onPosition: (x: number, z: number) => void;
+  onStep?: () => void;
   bounds: number; spawn: [number, number]; reducedMotion: boolean; cameraOffset: readonly [number, number, number]; canMove?: (x: number, z: number) => boolean;
-  cinematicSeconds?: number | null; celebrate?: boolean;
+  cinematicSeconds?: number | null; celebrate?: boolean; reaction?: number; departing?: boolean;
 }) {
   const group = useRef<Group>(null);
   const moving = useRef(false);
+  const facing = useRef<SpriteFacing>('down');
+  const lastSide = useRef<'left' | 'right'>('right');
   const { camera } = useThree();
   const worldDirection = useRef(new Vector3());
   const offset = useMemo(() => new Vector3(...cameraOffset), [cameraOffset[0], cameraOffset[1], cameraOffset[2]]);
   const forward = useMemo(() => new Vector3(-offset.x, 0, -offset.z).normalize(), [offset]);
   const right = useMemo(() => new Vector3(-forward.z, 0, forward.x), [forward]);
   const lastReport = useRef(0);
+  const lastStep = useRef(0);
   const lookTarget = useRef(new Vector3(spawn[0], 0.8, spawn[1]));
   useLayoutEffect(() => {
     camera.position.set(spawn[0] + offset.x, offset.y, spawn[1] + offset.z);
@@ -30,10 +34,14 @@ export function Player({ identity, vector, onPosition, bounds, spawn, reducedMot
     moving.current = dir.lengthSq() > 0.001;
     if (moving.current) {
       dir.normalize();
+      facing.current = Math.abs(dir.x) > Math.abs(dir.z) ? dir.x > 0 ? 'right' : 'left' : dir.z > 0 ? 'down' : 'up';
+      if (facing.current === 'left' || facing.current === 'right') lastSide.current = facing.current;
       const x = group.current.position.x + dir.x * 4.6 * delta;
       const z = group.current.position.z + dir.z * 4.6 * delta;
-      if (Math.hypot(x, z) < bounds && (!canMove || canMove(x, z))) { group.current.position.x = x; group.current.position.z = z; }
+      const advanced = Math.hypot(x, z) < bounds && (!canMove || canMove(x, z));
+      if (advanced) { group.current.position.x = x; group.current.position.z = z; }
       group.current.rotation.y = MathUtils.lerp(group.current.rotation.y, Math.atan2(dir.x, dir.z), 1 - Math.exp(-12 * delta));
+      if (advanced && onStep && state.clock.elapsedTime - lastStep.current > 0.54) { lastStep.current = state.clock.elapsedTime; onStep(); }
     }
     const target = group.current.position;
     const cinematic = cinematicSeconds !== null && cinematicSeconds !== undefined;
@@ -48,6 +56,6 @@ export function Player({ identity, vector, onPosition, bounds, spawn, reducedMot
   });
   return <group ref={group} position={[spawn[0], 0, spawn[1]]}>
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.012, 0]}><circleGeometry args={[0.46, 16]} /><meshBasicMaterial color="#27353b" transparent opacity={0.25} depthWrite={false} /></mesh>
-    <FriendAvatar identity={identity} moving={moving} reducedMotion={reducedMotion} celebrate={celebrate ?? false} />
+    <FriendAvatar sprites={sprites} moving={moving} facing={facing} lastSide={lastSide} reducedMotion={reducedMotion} celebrate={celebrate ?? false} reaction={reaction} departing={departing} />
   </group>;
 }
